@@ -176,6 +176,14 @@
     const y = layout.vAnchor === 'bottom' ? layout.y - boxH : layout.y;
     const innerL = x + padL, innerR = x + boxW - padR;
     const alignX = (w) => layout.align === 'center' ? (innerL + innerR) / 2 - w / 2 : layout.align === 'right' ? innerR - w : innerL;
+    // Justify: spread letters so each line fills the inner width of the box.
+    const justify = (line, l, r) => {
+      if (layout.align !== 'justify' || line.empty) return line;
+      const n = Array.from(line.text).length;
+      const target = Math.max(line.width, r - l);
+      if (n < 2) return line;
+      return { ...line, x: l, extraLs: (target - line.width) / (n - 1), width: target };
+    };
 
     let top = y + bd.padY + (bd.type === 'image' ? (bd.image.textOffsetY || 0) : 0);
     // For natural-size images, vertically center text inside the image.
@@ -186,7 +194,7 @@
     const subTop = titleL.bottom + gap;
     const subL = { ...sm, x: alignX(sm.width) + xShift, baseline: subTop + sm.ascent, top: subTop, bottom: subTop + sm.ascent + sm.descent };
 
-    const out = { box: { x, y, w: boxW, h: boxH }, title: titleL, subtitle: subL, padL, padR, contentW, contentH };
+    const out = { box: { x, y, w: boxW, h: boxH }, title: justify(titleL, innerL + xShift, innerR + xShift), subtitle: justify(subL, innerL + xShift, innerR + xShift), padL, padR, contentW, contentH };
 
     if (tt) {
       const { tW, tH, sW, sH, py2 } = tt;
@@ -197,6 +205,8 @@
       const ax = (w, b) => layout.align === 'center' ? b.x + b.w / 2 - w / 2 : layout.align === 'right' ? b.x + b.w - padR - w : b.x + padL;
       out.title = { ...tm, x: ax(tm.width, out.titleBox), baseline: y + bd.padY + tm.ascent, top: y + bd.padY, bottom: y + bd.padY + tm.ascent + tm.descent };
       out.subtitle = { ...sm, x: ax(sm.width, out.subBox), baseline: y + tH + py2 + sm.ascent, top: y + tH + py2, bottom: y + tH + py2 + sm.ascent + sm.descent };
+      out.title = justify(out.title, out.titleBox.x + padL, out.titleBox.x + tW - padR);
+      out.subtitle = justify(out.subtitle, out.subBox.x + padL, out.subBox.x + sW - padR);
     }
     return out;
   }
@@ -405,6 +415,7 @@
       ctx.beginPath(); ctx.rect(bx.x, bx.y, bx.w, bx.h); ctx.clip();
     }
     setTextStyle(ctx, s);
+    if (line.extraLs) ctx.letterSpacing = `${(s.letterSpacing || 0) + line.extraLs}px`;
     ctx.fillStyle = s.color;
     textShadow(ctx, s);
 
@@ -421,8 +432,9 @@
     applyParams(ctx, r, s.size);
     if (r.tracking) {
       const extra = r.tracking * s.size * -1; // positive spread at start
-      ctx.letterSpacing = `${(s.letterSpacing || 0) + extra}px`;
-      const w = ctx.measureText(line.text).width - ((s.letterSpacing || 0) + extra);
+      const ls = (s.letterSpacing || 0) + (line.extraLs || 0) + extra;
+      ctx.letterSpacing = `${ls}px`;
+      const w = ctx.measureText(line.text).width - ls;
       const anchorX = line.x + line.width / 2 - w / 2;
       ctx.fillText(line.text, anchorX, line.baseline);
     } else {
@@ -521,8 +533,27 @@
     drawText(ctx, state.title, L.title, phaseAt(state.title.anim, t, duration), L, state);
     drawText(ctx, state.subtitle, L.subtitle, phaseAt(state.subtitle.anim, t, duration), L, state);
 
+    L.layers = layerBounds(state, L);
     if (opts.guides) drawGuides(ctx, state, L, opts);
     return L;
+  }
+
+  // Untransformed bounds of each layer, used for click-to-select.
+  function layerBounds(state, L) {
+    const tb = (line, s) => (line.empty ? null : { x: line.x - 4, y: line.top - s.size * 0.12, w: line.width + 8, h: (line.bottom - line.top) + s.size * 0.24 });
+    return {
+      title: tb(L.title, state.title),
+      subtitle: tb(L.subtitle, state.subtitle),
+      backdrop: state.backdrop.type === 'none' ? null : { ...L.box },
+    };
+  }
+  function hitTest(L, x, y) {
+    if (!L || !L.layers) return null;
+    for (const k of ['title', 'subtitle', 'backdrop']) {
+      const b = L.layers[k];
+      if (b && x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) return k;
+    }
+    return null;
   }
 
   function drawGuides(ctx, state, L, opts) {
@@ -555,6 +586,21 @@
       ctx.fillText('Action safe 93%', W * 0.965 - 8 * lw, H * 0.035 + 18 * lw);
       ctx.textAlign = 'left';
     }
+    if (opts.selected && L.layers[opts.selected]) {
+      const b = L.layers[opts.selected];
+      ctx.save();
+      ctx.strokeStyle = '#f59e0b'; ctx.lineWidth = 2 * lw; ctx.setLineDash([6 * lw, 4 * lw]);
+      ctx.strokeRect(b.x - 3 * lw, b.y - 3 * lw, b.w + 6 * lw, b.h + 6 * lw);
+      ctx.setLineDash([]);
+      const label = { backdrop: 'Backdrop', title: 'Title', subtitle: 'Subtitle' }[opts.selected];
+      ctx.font = `600 ${12 * lw}px sans-serif`;
+      const tw = ctx.measureText(label).width + 10 * lw;
+      ctx.fillStyle = '#f59e0b';
+      ctx.fillRect(b.x - 3 * lw, b.y - 3 * lw - 18 * lw, tw, 18 * lw);
+      ctx.fillStyle = '#111';
+      ctx.fillText(label, b.x + 2 * lw, b.y - 3 * lw - 5 * lw);
+      ctx.restore();
+    }
     if (opts.bounds) {
       ctx.strokeStyle = 'rgba(255,80,160,0.9)';
       ctx.setLineDash([4 * lw, 4 * lw]);
@@ -565,7 +611,7 @@
 
   global.Engine = {
     BACKDROP_ANIMS, TEXT_ANIMS, SHAPES,
-    render, computeLayout, phaseAt, timingSpans, imagesReady, getImage,
+    render, computeLayout, phaseAt, timingSpans, imagesReady, getImage, hitTest,
     set onImageLoad(fn) { onImageLoad = fn; },
   };
 })(typeof window !== 'undefined' ? window : globalThis);

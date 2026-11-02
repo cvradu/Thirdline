@@ -164,14 +164,14 @@
         const scale = def.scale || 1; // UI value = state * scale (e.g. opacity as %)
         i.addEventListener('input', () => { n.value = i.value; set(+i.value / scale); });
         n.addEventListener('input', () => { if (n.value !== '' && !isNaN(+n.value)) { i.value = n.value; set(+n.value / scale); } });
-        ctl.append(i, n, def.unit ? el('span', { class: 'unit' }, def.unit) : null);
+        ctl.append(i, n, ...(def.unit ? [el('span', { class: 'unit' }, def.unit)] : []));
         sync = () => { const v = +((val() ?? 0) * scale).toFixed(4); i.value = v; if (document.activeElement !== n) n.value = v; };
         break;
       }
       case 'number': {
         const n = el('input', { type: 'number', min: def.min, max: def.max, step: def.step ?? 1 });
         n.addEventListener('input', () => { if (n.value !== '' && !isNaN(+n.value)) set(+n.value); });
-        ctl.append(n, def.unit ? el('span', { class: 'unit' }, def.unit) : null);
+        ctl.append(n, ...(def.unit ? [el('span', { class: 'unit' }, def.unit)] : []));
         sync = () => { if (document.activeElement !== n) n.value = val(); };
         break;
       }
@@ -254,7 +254,24 @@
     }
   }
 
+  function alignSection() {
+    return section('Alignment', [
+      row({ label: 'Text align', type: 'custom', render: (ctl) => {
+        const opts = [['left', '⟸ Left'], ['center', '≡ Center'], ['right', 'Right ⟹'], ['justify', '☰ Justify']];
+        const wrap = el('div', { class: 'seg' });
+        const btns = opts.map(([v, l]) => {
+          const b = el('button', { type: 'button', title: v, onclick: () => { state.layout.align = v; changed({ sync: true }); } }, l);
+          wrap.append(b); return [v, b];
+        });
+        ctl.append(wrap);
+        return () => btns.forEach(([v, b]) => b.classList.toggle('on', state.layout.align === v));
+      } }),
+      el('div', { class: 'sub' }, 'Justify spreads the letters of each line to fill the box. Set a Fixed or Min width on the Backdrop tab to control how wide.'),
+    ]);
+  }
+  const sectionRefs = {};
   function textSection(key, title) {
+    sectionRefs[key] = null;
     const p = (k) => `${key}.${k}`;
     const textual = key === 'title';
     return section(title, [
@@ -400,7 +417,7 @@
         row({ label: 'Y', type: 'number', path: 'layout.y', unit: 'px' }),
         row({ label: 'Anchor X', type: 'select', path: 'layout.hAnchor', options: { left: 'Left edge', center: 'Center', right: 'Right edge' } }),
         row({ label: 'Anchor Y', type: 'select', path: 'layout.vAnchor', options: { top: 'Top edge', bottom: 'Bottom edge (grows up)' } }),
-        row({ label: 'Text align', type: 'select', path: 'layout.align', options: { left: 'Left', center: 'Center', right: 'Right' } }),
+        row({ label: 'Text align', type: 'select', path: 'layout.align', options: { left: 'Left', center: 'Center', right: 'Right', justify: 'Justified' } }),
         row({ label: 'Line gap', type: 'range', path: 'layout.lineGap', min: -20, max: 80, unit: 'px' }),
         el('div', { class: 'sub' }, 'Tip: drag in the preview to move. It snaps to the title-safe edges.'),
       ]),
@@ -510,7 +527,11 @@
   }
 
   // ---------- Tabs ----------
-  const leftTabs = { text: () => [textSection('title', 'Title (line 1)'), textSection('subtitle', 'Subtitle (line 2)')], backdrop: backdropPanel, layout: layoutPanel };
+  const leftTabs = {
+    text: () => [alignSection(), (sectionRefs.title = textSection('title', 'Title (line 1)')), (sectionRefs.subtitle = textSection('subtitle', 'Subtitle (line 2)'))],
+    backdrop: backdropPanel,
+    layout: layoutPanel,
+  };
   const rightTabs = { 'anim-backdrop': () => animPanel('backdrop'), 'anim-title': () => animPanel('title'), 'anim-subtitle': () => animPanel('subtitle') };
   function buildTabs(navSel, body, tabs) {
     const panes = {};
@@ -522,6 +543,27 @@
     navSel.addEventListener('click', (e) => { const b = e.target.closest('button[data-tab]'); if (b) show(b.dataset.tab); });
     show(Object.keys(tabs)[0]);
     return show;
+  }
+
+  // ---------- Layer selection ----------
+  let selected = null, showLeft = () => {}, showRight = () => {};
+  function selectLayer(k, { reveal = true } = {}) {
+    selected = k;
+    document.querySelectorAll('.layer-chips button').forEach((b) => b.classList.toggle('on', b.dataset.layer === k));
+    if (k && reveal) {
+      showRight(`anim-${k}`);
+      if (k === 'backdrop') showLeft('backdrop');
+      else {
+        showLeft('text');
+        const sec = sectionRefs[k];
+        if (sec) {
+          sec.scrollIntoView({ block: 'start', behavior: 'smooth' });
+          sec.classList.remove('flash'); void sec.offsetWidth; sec.classList.add('flash');
+          if (reveal === 'focus') sec.querySelector('input[type=text]')?.focus();
+        }
+      }
+    }
+    drawPreview(); drawTimeline();
   }
 
   // ---------- Preview ----------
@@ -545,7 +587,7 @@
 
   function drawPreview() {
     if (preview.width !== state.comp.width || preview.height !== state.comp.height) { preview.width = state.comp.width; preview.height = state.comp.height; fitFrame(); }
-    lastLayout = Engine.render(pctx, state, time, { guides: true, safeAreas: view.safeAreas, bounds: view.bounds || dragging });
+    lastLayout = Engine.render(pctx, state, time, { guides: true, safeAreas: view.safeAreas, bounds: view.bounds || dragging, selected });
     const fps = state.comp.fps;
     const f = Math.round(time * fps);
     $('#timecode').textContent = `${time.toFixed(2)}s · f${f} / ${Math.round(state.comp.duration * fps)}`;
@@ -574,8 +616,16 @@
   let dragging = false, dragStart = null;
   const toComp = (e) => { const r = preview.getBoundingClientRect(); return [((e.clientX - r.left) / r.width) * state.comp.width, ((e.clientY - r.top) / r.height) * state.comp.height]; };
   preview.addEventListener('pointerdown', (e) => {
+    const [cx, cy] = toComp(e);
+    const hit = Engine.hitTest(lastLayout, cx, cy);
+    if (hit !== selected) selectLayer(hit);
     dragging = true; preview.setPointerCapture(e.pointerId);
-    dragStart = { m: toComp(e), x: state.layout.x, y: state.layout.y };
+    dragStart = { m: [cx, cy], x: state.layout.x, y: state.layout.y };
+  });
+  preview.addEventListener('dblclick', (e) => {
+    const [cx, cy] = toComp(e);
+    const hit = Engine.hitTest(lastLayout, cx, cy);
+    if (hit === 'title' || hit === 'subtitle') selectLayer(hit, { reveal: 'focus' });
   });
   preview.addEventListener('pointermove', (e) => {
     if (!dragging) return;
@@ -628,7 +678,9 @@
     }
     TRACKS.forEach(([key, label, color], i) => {
       const y = TL.ruler + 6 + i * TL.rowH;
-      g.fillStyle = '#8a93a6'; g.font = '11px -apple-system, sans-serif'; g.fillText(label, 10, y + 15);
+      const isSel = selected === key;
+      if (isSel) { g.fillStyle = '#f59e0b22'; g.fillRect(0, y, TL.left - 6, 22); }
+      g.fillStyle = isSel ? '#f59e0b' : '#8a93a6'; g.font = `${isSel ? 600 : 400} 11px -apple-system, sans-serif`; g.fillText(label, 10, y + 15);
       const hidden = key === 'backdrop' ? state.backdrop.type === 'none' : !state[key].text;
       const sp = Engine.timingSpans(state[key].anim, D);
       const x0 = sx(sp.inStart), x1 = sx(sp.inEnd), x2 = sx(sp.outStart), x3 = sx(sp.outEnd);
@@ -654,7 +706,9 @@
     const r = tl.getBoundingClientRect(); const mx = e.clientX - r.left, my = e.clientY - r.top;
     tl.setPointerCapture(e.pointerId);
     const i = Math.floor((my - TL.ruler - 6) / TL.rowH);
+    if (mx < TL.left && i >= 0 && i < TRACKS.length) { selectLayer(TRACKS[i][0]); tl.releasePointerCapture(e.pointerId); return; }
     if (my > TL.ruler && i >= 0 && i < TRACKS.length) {
+      if (selected !== TRACKS[i][0]) selectLayer(TRACKS[i][0]);
       const key = TRACKS[i][0]; const a = state[key].anim;
       const sp = Engine.timingSpans(a, state.comp.duration);
       const x0 = sx(sp.inStart), x1 = sx(sp.inEnd), x2 = sx(sp.outStart), x3 = sx(sp.outEnd);
@@ -871,6 +925,8 @@
     else if (e.key === 'ArrowLeft') $('#btnPrevFrame').click();
     else if (e.key === 'ArrowRight') $('#btnNextFrame').click();
     else if (e.key === 'Home') $('#btnStart').click();
+    else if (e.key === 'Escape') selectLayer(null);
+    else if (e.key === 'Tab' && document.activeElement === document.body) { e.preventDefault(); const order = ['backdrop', 'title', 'subtitle']; selectLayer(order[(order.indexOf(selected) + (e.shiftKey ? 2 : 1)) % 3]); }
   });
   $('#btnUndo').onclick = undo;
   $('#btnRedo').onclick = redo;
@@ -878,8 +934,9 @@
   // ---------- Boot ----------
   async function boot() {
     for (const f of await api.fonts.list()) await addUserFont(f);
-    buildTabs($('nav[data-for=left]'), $('#leftBody'), leftTabs);
-    buildTabs($('nav[data-for=right]'), $('#rightBody'), rightTabs);
+    showLeft = buildTabs($('nav[data-for=left]'), $('#leftBody'), leftTabs);
+    showRight = buildTabs($('nav[data-for=right]'), $('#rightBody'), rightTabs);
+    document.querySelectorAll('.layer-chips button').forEach((b) => (b.onclick = () => selectLayer(b.dataset.layer === selected ? null : b.dataset.layer)));
     syncControls(); refreshVisibility();
     await refreshPresets();
     await document.fonts.ready; await ensureFonts();

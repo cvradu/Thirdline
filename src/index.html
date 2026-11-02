@@ -47,9 +47,12 @@
           <option value="image">Reference image…</option>
         </select>
         <input type="file" id="bgFile" accept="image/*" hidden />
+        <div class="layer-chips" title="Select a layer (or click it in the preview)">
+          <button data-layer="backdrop">Backdrop</button><button data-layer="title">Title</button><button data-layer="subtitle">Subtitle</button>
+        </div>
         <label class="chk"><input type="checkbox" id="optSafe" checked /> Safe areas</label>
         <label class="chk"><input type="checkbox" id="optBounds" /> Bounds</label>
-        <span class="hint">Drag the lower third in the preview to move it</span>
+        <span class="hint">Click a layer to edit it · drag to move</span>
       </div>
       <div class="viewport" id="viewport">
         <div class="frame" id="frame">

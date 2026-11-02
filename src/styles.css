@@ -16,8 +16,8 @@ input[type=text] { user-select: text; }
 input[type=color] { width: 34px; height: 26px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: none; cursor: pointer; }
 input[type=range] { accent-color: var(--accent); }
 .lbl { color: var(--muted); }
-.chk { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); }
-.hint { color: #596176; margin-left: auto; font-size: 12px; }
+.chk { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); white-space: nowrap; }
+.hint { color: #596176; margin-left: auto; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 
 .topbar { height: 48px; display: flex; align-items: center; gap: 18px; padding: 0 14px; border-bottom: 1px solid var(--line); background: var(--panel); -webkit-app-region: drag; }
 .topbar * { -webkit-app-region: no-drag; }
@@ -93,3 +93,11 @@ dialog::backdrop { background: #000a; }
 .progress span { position: relative; display: block; text-align: center; line-height: 20px; font-size: 12px; color: #fff; mix-blend-mode: difference; }
 .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: #1f2430; border: 1px solid var(--line); padding: 8px 14px; border-radius: 8px; box-shadow: 0 6px 24px #0008; z-index: 10; }
 ::-webkit-scrollbar { width: 10px; } ::-webkit-scrollbar-thumb { background: #2a3040; border-radius: 6px; border: 2px solid var(--panel); }
+
+.layer-chips, .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.layer-chips button, .seg button { border: 0; border-radius: 0; background: transparent; color: var(--muted); padding: 4px 10px; font-size: 12px; }
+.layer-chips button + button, .seg button + button { border-left: 1px solid var(--line); }
+.layer-chips button.on, .seg button.on { background: var(--accent); color: #111; font-weight: 600; }
+.seg { width: 100%; } .seg button { flex: 1; padding: 5px 4px; }
+.section.flash { animation: flash 1s ease-out; }
+@keyframes flash { 0% { background: #f59e0b30; } 100% { background: transparent; } }

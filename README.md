@@ -7,6 +7,8 @@ A desktop app for designing animated lower thirds and exporting them with a tran
 - **Animation:** separate in and out animations for backdrop, title and subtitle (18 backdrop animations, 21 text animations including per-letter and per-word reveals, typewriter and mask reveals), 20 easing curves plus a draggable custom bezier.
 - **Timing:** duration, frame rate, per-layer start/end; a timeline you can drag to retime layers; play, loop, frame-step and scrub.
 - **Layout:** resolutions from 720p to 4K plus vertical/square, drag to position with snapping to title-safe and action-safe guides, quick-place buttons, anchors so the box grows in the right direction.
+- **Layers:** click the backdrop, title or subtitle in the preview (or the layer buttons / timeline labels) to jump straight to its controls. Double-click text to edit it. Tab cycles layers, Esc deselects.
+- **Alignment:** left, center, right or justified (letters spread to fill the box).
 - **Presets:** 7 built-in styles, save your own, import/share preset files. Undo/redo and autosave.
 - **Export (ffmpeg is bundled):** MOV ProRes 4444 with alpha, WebM VP9 with alpha, PNG sequence with alpha, MP4 H.264 over a solid colour.
 
