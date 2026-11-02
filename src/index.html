@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; font-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'" />
+  <title>L3rd Creator</title>
+  <link rel="stylesheet" href="fonts/fonts.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo">▁▃</span> L3rd Creator</div>
+    <div class="topbar-group">
+      <label class="lbl">Preset</label>
+      <select id="presetSelect"></select>
+      <button id="btnSavePreset" title="Save current design as a preset">Save</button>
+      <button id="btnDeletePreset" title="Delete selected saved preset">Delete</button>
+      <button id="btnImportPreset" title="Import preset file">Import…</button>
+      <button id="btnExportPreset" title="Export preset to a file">Share…</button>
+    </div>
+    <div class="topbar-group">
+      <button id="btnUndo" title="Undo (Ctrl/Cmd+Z)">↶</button>
+      <button id="btnRedo" title="Redo (Ctrl/Cmd+Shift+Z)">↷</button>
+      <button id="btnExport" class="primary">Export…</button>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <aside class="panel" id="leftPanel">
+      <nav class="tabs" data-for="left">
+        <button data-tab="text" class="active">Text</button>
+        <button data-tab="backdrop">Backdrop</button>
+        <button data-tab="layout">Layout</button>
+      </nav>
+      <div class="tab-body" id="leftBody"></div>
+    </aside>
+
+    <section class="stage">
+      <div class="stage-toolbar">
+        <label class="lbl">Background</label>
+        <select id="bgMode">
+          <option value="checker">Checkerboard</option>
+          <option value="dark">Dark</option>
+          <option value="mid">Grey</option>
+          <option value="light">Light</option>
+          <option value="green">Green</option>
+          <option value="image">Reference image…</option>
+        </select>
+        <input type="file" id="bgFile" accept="image/*" hidden />
+        <label class="chk"><input type="checkbox" id="optSafe" checked /> Safe areas</label>
+        <label class="chk"><input type="checkbox" id="optBounds" /> Bounds</label>
+        <span class="hint">Drag the lower third in the preview to move it</span>
+      </div>
+      <div class="viewport" id="viewport">
+        <div class="frame" id="frame">
+          <div class="frame-bg" id="frameBg"></div>
+          <canvas id="preview"></canvas>
+        </div>
+      </div>
+      <div class="transport">
+        <button id="btnStart" title="Go to start (Home)">⏮</button>
+        <button id="btnPrevFrame" title="Previous frame (←)">◀︎|</button>
+        <button id="btnPlay" class="play" title="Play / pause (Space)">▶</button>
+        <button id="btnNextFrame" title="Next frame (→)">|▶︎</button>
+        <button id="btnHold" title="Jump to the fully-on frame">Hold</button>
+        <label class="chk"><input type="checkbox" id="optLoop" checked /> Loop</label>
+        <span class="timecode" id="timecode">00:00:00</span>
+        <input type="range" id="scrub" min="0" max="1" step="0.0001" value="0" />
+      </div>
+      <canvas id="timeline" height="120"></canvas>
+    </section>
+
+    <aside class="panel" id="rightPanel">
+      <nav class="tabs" data-for="right">
+        <button data-tab="anim-backdrop" class="active">Backdrop anim</button>
+        <button data-tab="anim-title">Title anim</button>
+        <button data-tab="anim-subtitle">Subtitle anim</button>
+      </nav>
+      <div class="tab-body" id="rightBody"></div>
+    </aside>
+  </main>
+
+  <dialog id="exportDialog">
+    <form method="dialog" class="modal">
+      <h2>Export</h2>
+      <div class="formats" id="formatList">
+        <label><input type="radio" name="fmt" value="prores" checked /> <b>MOV · ProRes 4444</b><small>Alpha channel. Best for Premiere, Final Cut, Resolve, After Effects.</small></label>
+        <label><input type="radio" name="fmt" value="webm" /> <b>WebM · VP9</b><small>Alpha channel. Small files, for web players, OBS and browsers.</small></label>
+        <label><input type="radio" name="fmt" value="png" /> <b>PNG sequence</b><small>Alpha channel. One PNG per frame, works everywhere.</small></label>
+        <label><input type="radio" name="fmt" value="mp4" /> <b>MP4 · H.264</b><small>No alpha. Rendered over the colour below.</small></label>
+      </div>
+      <div class="row"><label>File name</label><input type="text" id="exportName" value="lower-third" /></div>
+      <div class="row" id="mp4BgRow"><label>Background (MP4)</label><input type="color" id="exportBg" value="#00b140" /></div>
+      <p class="muted" id="exportSummary"></p>
+      <div class="progress" id="exportProgress" hidden><div class="bar"></div><span></span></div>
+      <p class="error" id="exportError" hidden></p>
+      <div class="actions">
+        <button type="button" id="btnExportCancel">Close</button>
+        <button type="button" id="btnReveal" hidden>Show in folder</button>
+        <button type="button" id="btnExportGo" class="primary">Choose location &amp; export</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="easing.js"></script>
+  <script src="engine.js"></script>
+  <script src="presets.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
