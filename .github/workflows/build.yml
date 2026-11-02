@@ -4,6 +4,8 @@ on:
     branches: [main]
     tags: ['v*']
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   mac:
     runs-on: macos-14
@@ -15,17 +17,27 @@ jobs:
           cache: npm
       - run: npm ci
       # Apple Silicon build (runner is arm64, so ffmpeg-static fetched the arm64 binary)
-      - run: npx electron-builder --mac dmg --arm64 --publish never -c.mac.identity=- -c.mac.hardenedRuntime=false
+      - run: npx electron-builder --mac dmg --arm64 --publish never
       # Intel build: swap in the x64 ffmpeg binary first
       - run: |
           cd node_modules/ffmpeg-static && rm -f ffmpeg && npm_config_arch=x64 node install.js && file ffmpeg
-      - run: npx electron-builder --mac dmg --x64 --publish never -c.mac.identity=- -c.mac.hardenedRuntime=false
-      - run: ls -la dist && codesign -dv dist/mac-arm64/Thirdline.app 2>&1 | head -5
+      - run: npx electron-builder --mac dmg --x64 --publish never
+      - run: |
+          ls -la dist
+          codesign -dv dist/mac-arm64/Thirdline.app
+          codesign -dv dist/mac/Thirdline.app
+          hdiutil verify dist/Thirdline-*-arm64.dmg
+          hdiutil attach -nobrowse -mountpoint /tmp/tl dist/Thirdline-*-arm64.dmg && ls -la /tmp/tl && hdiutil detach /tmp/tl
       - uses: actions/upload-artifact@v4
         with:
           name: thirdline-mac
           path: dist/*.dmg
           compression-level: 0
+      - name: Publish release with the installers
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/*.dmg --repo "$GITHUB_REPOSITORY" --title "Thirdline $GITHUB_REF_NAME" --notes "Mac installers. Apple Silicon (M1–M4): Thirdline-*-arm64.dmg. Intel: Thirdline-*-x64.dmg." || gh release upload "$GITHUB_REF_NAME" dist/*.dmg --clobber --repo "$GITHUB_REPOSITORY"
   other:
     strategy:
       matrix:
