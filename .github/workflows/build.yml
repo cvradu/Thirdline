@@ -1,13 +1,35 @@
 name: Build desktop apps
 on:
   push:
+    branches: [main]
     tags: ['v*']
   workflow_dispatch:
 jobs:
-  build:
+  mac:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Apple Silicon build (runner is arm64, so ffmpeg-static fetched the arm64 binary)
+      - run: npx electron-builder --mac dmg --arm64 --publish never -c.mac.identity=- -c.mac.hardenedRuntime=false
+      # Intel build: swap in the x64 ffmpeg binary first
+      - run: |
+          cd node_modules/ffmpeg-static && rm -f ffmpeg && npm_config_arch=x64 node install.js && file ffmpeg
+      - run: npx electron-builder --mac dmg --x64 --publish never -c.mac.identity=- -c.mac.hardenedRuntime=false
+      - run: ls -la dist && codesign -dv dist/mac-arm64/Thirdline.app 2>&1 | head -5
+      - uses: actions/upload-artifact@v4
+        with:
+          name: thirdline-mac
+          path: dist/*.dmg
+          compression-level: 0
+  other:
     strategy:
       matrix:
-        os: [macos-14, windows-latest, ubuntu-latest]
+        os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -17,12 +39,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx electron-builder --publish never
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: false
       - uses: actions/upload-artifact@v4
         with:
-          name: l3rd-creator-${{ matrix.os }}
+          name: thirdline-${{ matrix.os }}
           path: |
-            dist/*.dmg
             dist/*.exe
             dist/*.AppImage

@@ -62,16 +62,25 @@
       "iconSize": 120,
       "contents": [
         {
-          "x": 160,
-          "y": 200
+          "x": 170,
+          "y": 190
         },
         {
-          "x": 440,
-          "y": 200,
+          "x": 430,
+          "y": 190,
           "type": "link",
           "path": "/Applications"
         }
-      ]
+      ],
+      "window": {
+        "width": 600,
+        "height": 400
+      },
+      "artifactName": "Thirdline-${version}-${arch}.${ext}"
     }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cvradu/thirdline.git"
   }
 }
