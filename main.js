@@ -23,7 +23,7 @@ function createWindow() {
     minWidth: 1100,
     minHeight: 700,
     backgroundColor: '#0b0d12',
-    title: 'L3rd Creator',
+    title: 'Thirdline',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,

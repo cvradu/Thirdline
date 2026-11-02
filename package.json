@@ -1,7 +1,7 @@
 {
-  "name": "l3rd-creator",
+  "name": "thirdline",
   "version": "0.1.0",
-  "description": "Desktop app for designing and exporting animated lower thirds with alpha (ProRes 4444, WebM, PNG).",
+  "description": "Thirdline: design animated lower thirds and export them with alpha (ProRes 4444, WebM, PNG).",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -18,10 +18,10 @@
     "electron": "^33.2.1",
     "electron-builder": "^25.1.8"
   },
-  "productName": "L3rd Creator",
+  "productName": "Thirdline",
   "build": {
-    "appId": "com.l3rd.creator",
-    "productName": "L3rd Creator",
+    "appId": "app.thirdline.desktop",
+    "productName": "Thirdline",
     "files": [
       "main.js",
       "preload.js",
@@ -33,18 +33,44 @@
     ],
     "mac": {
       "category": "public.app-category.video",
+      "icon": "build/icon.png",
       "target": [
         "dmg"
-      ]
+      ],
+      "identity": null,
+      "darkModeSupport": true
     },
     "win": {
       "target": [
         "nsis"
-      ]
+      ],
+      "icon": "build/icon.png"
     },
     "linux": {
       "target": [
         "AppImage"
+      ],
+      "icon": "build/icon.png",
+      "category": "AudioVideo"
+    },
+    "directories": {
+      "buildResources": "build",
+      "output": "dist"
+    },
+    "dmg": {
+      "title": "Thirdline",
+      "iconSize": 120,
+      "contents": [
+        {
+          "x": 160,
+          "y": 200
+        },
+        {
+          "x": 440,
+          "y": 200,
+          "type": "link",
+          "path": "/Applications"
+        }
       ]
     }
   }

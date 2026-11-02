@@ -1,4 +1,4 @@
-/* L3rd Creator — editor UI. Depends on Easing, Engine, Presets globals. */
+/* Thirdline — editor UI. Depends on Easing, Engine, Presets globals. */
 (function () {
   'use strict';
   const { EASING_LABELS, getEasing } = window.Easing;

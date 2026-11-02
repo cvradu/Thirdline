@@ -1,4 +1,4 @@
-# L3rd Creator
+# Thirdline
 
 A desktop app for designing animated lower thirds and exporting them with a transparent background.
 
