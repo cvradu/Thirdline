@@ -630,6 +630,19 @@
       ];
       return props;
     }
+    // Torn paper → After Effects' Roughen Edges (its own fractal, so the tears differ in detail).
+    function tornFx(o) {
+      const t = o && o.torn;
+      if (!(t && t.on && t.amount > 0)) return [];
+      return [{ match: 'ADBE Roughen Edges', name: 'TL Torn paper', params: [
+        { sel: 'OneD:1', value: Math.max(0, t.amount) },
+        { sel: 'OneD:2', value: 1.5, optional: true },
+        { sel: 'OneD:3', value: 0.9, optional: true },
+        { sel: 'OneD:4', value: Math.max(10, Math.min(1000, (t.size || 40) * 2.5)), optional: true },
+        { sel: 'OneD:6', value: 4, optional: true },
+        { sel: 'OneD:7', value: ((t.seed || 1) * 47) % 360, optional: true },
+      ] }];
+    }
     function blurEffect(id, possible) {
       if (!possible) return [];
       return [{ match: 'ADBE Gaussian Blur 2', name: 'TL Blur', params: [{ sel: 'OneD:0', ...exprCall(`T.blur(${JSON.stringify(id)})`) }, { sel: 'OneD:2', value: 1, optional: true }] }];
@@ -838,14 +851,14 @@
       if (main.length) {
         const name = uniqueName('Backdrop');
         nameOf.backdrop = name; CFG.L.backdrop.name = name;
-        layers.push({ id: 'backdrop', name, kind: 'shape', groups: main, ...common('backdrop'), effects: [...fx, ...gradFx, ...(sh ? [sh] : []), ...blurEffect('backdrop', mayBlur(bd, 'backdrop'))] });
+        layers.push({ id: 'backdrop', name, kind: 'shape', groups: main, ...common('backdrop'), effects: [...fx, ...gradFx, ...tornFx(bd), ...(sh ? [sh] : []), ...blurEffect('backdrop', mayBlur(bd, 'backdrop'))] });
       }
       if (accent.length) {
         const name = uniqueName('Backdrop accent');
         if (!main.length) { nameOf.backdrop = name; CFG.L.backdrop.name = name; }
         // The accent layer reads its animation values from the main backdrop layer.
         const accShadow = sh && (s === 'twoTone' || !main.length) ? [sh] : [];
-        layers.push({ id: 'backdropAccent', name, kind: 'shape', groups: accent, ...common('backdrop'), effects: [...(main.length ? [] : fx), ...accShadow, ...blurEffect('backdrop', mayBlur(bd, 'backdrop'))] });
+        layers.push({ id: 'backdropAccent', name, kind: 'shape', groups: accent, ...common('backdrop'), effects: [...(main.length ? [] : fx), ...tornFx(bd), ...accShadow, ...blurEffect('backdrop', mayBlur(bd, 'backdrop'))] });
       }
     }
 
@@ -867,7 +880,7 @@
       CFG.L[id] = { kind: ly.kind, name, anim: ly.anim, vals: vals.vals, keyed: vals.keyed, baseOpacity: ly.opacity ?? 1,
         attach: ly.attach, ax: ly.ax ?? 0, ay: ly.ay ?? 0, x: ly.x || 0, y: ly.y || 0, w: ly.kind === 'image' ? eb.w : ly.w || 0, h: ly.kind === 'image' ? eb.h : ly.h || 0,
         shape: ly.shape, radius: ly.radius || 0, imgW: 0, imgH: 0, maskShape: ly.mask && ly.mask.shape, bleed: Engine.bleed(ly) };
-      const effects = [...vals.sliders.map(fxSlider)];
+      const effects = [...vals.sliders.map(fxSlider), ...tornFx(ly)];
       if (ly.shadow && ly.shadow.on) effects.push(shadowFx('TL Shadow', ly.shadow));
       effects.push(...blurEffect(id, mayBlur(ly, prefix)));
       const base = { id, name, ...inOut(ly), props: transformProps(id), masks: masksFor(id, ly, { clip: hasClip(ly) }), effects, motionBlur: !!(st.comp.motionBlur && st.comp.motionBlur.enabled) && ly.motionBlur !== false };
@@ -933,7 +946,7 @@
       const l = Engine.getLayer(st, id); if (!l) continue;
       if (l.kind === 'shape' && l.shape === 'path') warn(`Pen shape “${l.name || 'Shape'}” is left out of the .mogrt for now; export a MOV to keep it.`);
       if (l.mask && l.mask.enabled && l.mask.shape === 'path') warn(`${l.name || id}: pen-drawn masks are exported as a rectangle mask.`);
-      if (l.torn && l.torn.on) warn(`${l.name || id}: torn paper edges aren’t carried over to After Effects; export a MOV to keep them.`);
+      if (l.torn && l.torn.on && (l.torn.edge || 0) > 0) warn(`${l.name || id}: torn edges become After Effects’ Roughen Edges; the paper rim isn’t carried over.`);
       if (l.matte && l.matte.src) warn(`${l.name || id}: its track matte isn’t carried over to After Effects yet; export a MOV to keep it.`);
       if ((l.corners && l.corners.on) || (l.mask && l.mask.corners && l.mask.corners.on)) warn(`${l.name || id}: separate corner rounding uses the first corner’s radius in After Effects.`);
     }

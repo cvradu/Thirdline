@@ -33,6 +33,8 @@ function makeAE(log) {
     'ADBE Ramp': ['TwoD_SPATIAL', 'COLOR', 'TwoD_SPATIAL', 'COLOR', 'OneD', 'OneD', 'OneD'],
     'ADBE 4ColorGradient': ['NO_VALUE', 'TwoD_SPATIAL', 'COLOR', 'TwoD_SPATIAL', 'COLOR', 'TwoD_SPATIAL', 'COLOR', 'TwoD_SPATIAL', 'COLOR', 'OneD', 'OneD', 'OneD', 'OneD'],
     'ADBE Set Matte3': ['LAYER_INDEX', 'OneD', 'OneD', 'OneD', 'OneD', 'OneD'],
+    // Edge type, edge colour, border, sharpness, fractal influence, scale, stretch, offset, complexity, evolution
+    'ADBE Roughen Edges': ['OneD', 'COLOR', 'OneD', 'OneD', 'OneD', 'OneD', 'OneD', 'TwoD_SPATIAL', 'OneD', 'OneD'],
   };
   const GROUPS = {
     'ADBE Transform Group': ['ADBE Anchor Point', 'ADBE Position', 'ADBE Scale', 'ADBE Rotate Z', 'ADBE Opacity'],
@@ -205,6 +207,12 @@ function makeAE(log) {
     out.push({ label: 'Image backdrop', ...Mogrt.buildScene(img, ctx, { name: 'Image' }) });
     const four = Presets.builtin(5); four.backdrop.fillType = 'fourPoint'; four.backdrop.shape = 'corners';
     out.push({ label: '4-point + corners', ...Mogrt.buildScene(four, ctx, { name: 'Four' }) });
+    const torn = Presets.builtin(0); torn.backdrop.torn = { on: true, amount: 14, size: 36, edge: 0, seed: 3 }; torn.backdrop.fillType = 'linear';
+    torn.layers = { box: Presets.newLayer('shape', { shape: 'rect', w: 120, h: 40, torn: { on: true, amount: 8, size: 20, edge: 0, seed: 1 } }) };
+    const ts = Mogrt.buildScene(torn, ctx, { name: 'Torn' });
+    const rough = ts.scene.layers.filter((L) => (L.effects || []).some((f) => f.match === 'ADBE Roughen Edges')).length;
+    if (rough < 2) throw new Error('Roughen Edges missing: ' + rough);
+    out.push({ label: 'Torn paper', ...ts });
     return out;
   });
   await b.close();
