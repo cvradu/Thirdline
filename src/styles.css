@@ -313,3 +313,8 @@ details.parts > summary::before { content: '▸ '; } details.parts[open] > summa
 .align-row .btnrow { display: flex; flex-wrap: wrap; gap: 3px; }
 .align-row .btnrow button { padding: 3px 7px; min-width: 26px; font-size: 13px; }
 .layer-row.multi { outline: 1px dashed var(--accent); outline-offset: -1px; }
+
+.variants .chk { margin-right: 12px; }
+.var-thumbs { display: flex; gap: 10px; margin-top: 6px; align-items: flex-end; }
+.var-thumbs figure { margin: 0; text-align: center; font-size: 10px; color: var(--muted); }
+.var-thumbs img { display: block; border: 1px solid var(--line); border-radius: 4px; background: repeating-conic-gradient(#3a3f4b 0 25%, #2b2f38 0 50%) 0 0/12px 12px; }

@@ -897,6 +897,7 @@
     const o = off.getContext('2d');
     o.setTransform(1, 0, 0, 1, 0, 0);
     o.clearRect(0, 0, W, H);
+    o.setTransform(ctx.getTransform()); // keep the design scale (vertical / square versions)
     o.save(); draw(o); o.restore();
     o.save();
     o.globalCompositeOperation = m.invert ? 'destination-out' : 'destination-in';
@@ -1030,6 +1031,11 @@
     const bd = state.backdrop;
     L.extras = extraBoxes(ctx, state, L);
 
+    // Design scale (used by the vertical / square versions): the whole design scales around the
+    // layout anchor point, masks included.
+    const ds = state.comp.designScale || 1;
+    ctx.save();
+    if (ds !== 1) { ctx.translate(state.layout.x, state.layout.y); ctx.scale(ds, ds); ctx.translate(-state.layout.x, -state.layout.y); }
     for (const id of layerOrder(state)) {
       if (id === 'backdrop') {
         if (bd.type === 'none' || bd.visible === false) continue;
@@ -1063,6 +1069,7 @@
         withMask(ctx, state, ly, (c) => withParents(c, state, L, id, () => drawExtra(c, state, ly, eb, ph, L)));
       }
     }
+    ctx.restore();
     void base;
 
     L.order = layerOrder(state);

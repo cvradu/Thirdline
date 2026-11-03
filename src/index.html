@@ -195,6 +195,11 @@
       <div class="row"><label>Frame rate</label><select id="exportFps">
         <option>23.976</option><option>24</option><option>25</option><option>29.97</option><option>30</option><option>50</option><option>59.94</option><option>60</option>
       </select></div>
+      <div class="row variants"><label>Also make</label><div>
+        <label class="chk"><input type="checkbox" id="varVertical" /> 9:16 vertical</label>
+        <label class="chk"><input type="checkbox" id="varSquare" /> 1:1 square</label>
+        <div class="var-thumbs" id="varThumbs"></div>
+      </div></div>
       <div class="row" id="mp4BgRow"><label>Background (MP4)</label><input type="color" id="exportBg" value="#00b140" /></div>
       <p class="muted" id="exportSummary"></p>
       <div class="progress" id="exportProgress" hidden><div class="bar"></div><span></span></div>

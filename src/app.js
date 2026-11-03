@@ -3099,7 +3099,7 @@
     $('#exportError').hidden = true; $('#exportProgress').hidden = true; $('#btnReveal').hidden = true;
     $('#btnExportGo').disabled = false;
     $('#exportFps').value = String(state.comp.fps);
-    applyExportFor(); setPlaying(false); dlg.showModal();
+    applyExportFor(); setPlaying(false); dlg.showModal(); refreshVariantThumbs();
   };
   dlg.addEventListener('change', exportSummary);
   $('#btnExportCancel').onclick = async () => {
@@ -3137,11 +3137,78 @@
       throw err;
     } finally { exportJob = null; }
   }
+  // ---------- Vertical / square versions ----------
+  // Same design re-placed for another frame: kept in the same corner (inside safe margins, above
+  // the area social apps cover on vertical video) and scaled to fit the narrower frame.
+  const VARIANTS = { vertical: [1080, 1920, 'vertical'], square: [1080, 1080, 'square'] };
+  function variantState(src, w, h) {
+    const st = clone(src), W = src.comp.width, H = src.comp.height;
+    const pos = src.ui && src.ui.pos;
+    // Anchor the box to the corner it sits in, so it grows away from the frame edge.
+    if (pos && pos !== 'c') {
+      const col = pos.length === 1 ? 'c' : pos[1], row = pos[0];
+      const hA = col === 'l' ? 'left' : col === 'r' ? 'right' : 'center';
+      Object.assign(st.layout, { hAnchor: hA, vAnchor: row === 't' || row === 'm' ? 'top' : 'bottom' });
+      if (st.layout.align !== 'justify') st.layout.align = hA;
+    }
+    const rs = Engine.resolveAt(st, Engine.timingSpans(st.title.anim, st.comp.duration).inEnd + 0.5);
+    const L = Engine.layoutAt(mctx, rs);
+    const rects = Object.values(L.layers || {}).filter(Boolean).map((b) => Engine.screenRect(b));
+    const U = rects.length ? rects.reduce((a, r) => ({ x: Math.min(a.x, r.x), y: Math.min(a.y, r.y), x2: Math.max(a.x2, r.x + r.w), y2: Math.max(a.y2, r.y + r.h) }), { x: 1e9, y: 1e9, x2: -1e9, y2: -1e9 }) : { x: 0, y: 0, x2: W, y2: H };
+    const ox = rs.layout.x, oy = rs.layout.y;
+    // Same pixel size as the original (phone viewers need it readable), unless it would not fit.
+    let ds = Math.min(1, (0.9 * w) / Math.max(1, U.x2 - U.x));
+    const bottomY = h > w ? h * 0.78 : h * 0.9, mx = w * 0.05;
+    let nx, ny;
+    if (pos) {
+      const col = pos.length === 1 ? 'c' : pos[1], row = pos[0];
+      nx = col === 'l' ? mx : col === 'r' ? w - mx : w / 2;
+      ny = row === 't' ? h * 0.05 : row === 'm' || pos === 'c' ? h / 2 - (L.box.h * ds) / 2 : bottomY;
+    } else { nx = (ox / W) * w; ny = (oy / H) * h; }
+    // Keep the whole design inside the frame margins.
+    const left = nx + (U.x - ox) * ds, right = nx + (U.x2 - ox) * ds, top = ny + (U.y - oy) * ds, bottom = ny + (U.y2 - oy) * ds;
+    if (left < mx) nx += mx - left; else if (right > w - mx) nx -= right - (w - mx);
+    if (top < h * 0.05) ny += h * 0.05 - top; else if (bottom > (h > w ? h * 0.82 : h * 0.95)) ny -= bottom - (h > w ? h * 0.82 : h * 0.95);
+    const dx = nx - ox, dy = ny - oy;
+    st.layout.x = Math.round(st.layout.x + dx); st.layout.y = Math.round(st.layout.y + dy);
+    for (const [p, d] of [['layout.x', dx], ['layout.y', dy]]) for (const k of (st.keys && st.keys[p]) || []) k.v += d;
+    // Masks are in frame coordinates: move them with the design.
+    for (const id of Engine.layerOrder(st)) { const m = (Engine.getLayer(st, id) || {}).mask; if (m && m.enabled) { m.x += dx; m.y += dy; for (const [q, d] of [['x', dx], ['y', dy]]) for (const k of (st.keys && st.keys[`${pp(id)}.mask.${q}`]) || []) k.v += d; } }
+    st.comp.width = w; st.comp.height = h; st.comp.designScale = Math.round(ds * 1000) / 1000;
+    return st;
+  }
+  function variantThumb(st) {
+    const c = document.createElement('canvas'); c.width = st.comp.width; c.height = st.comp.height;
+    Engine.render(c.getContext('2d'), st, Engine.timingSpans(st.title.anim, st.comp.duration).inEnd + 0.5, {});
+    const t = document.createElement('canvas'), sc = 140 / st.comp.height; t.width = Math.round(st.comp.width * sc); t.height = 140;
+    t.getContext('2d').drawImage(c, 0, 0, t.width, t.height);
+    return t.toDataURL('image/png');
+  }
+  const wantedVariants = () => [['vertical', $('#varVertical').checked], ['square', $('#varSquare').checked]].filter(([, on]) => on).map(([k]) => k);
+  function refreshVariantThumbs() {
+    const box = $('#varThumbs'); box.innerHTML = '';
+    for (const k of wantedVariants()) {
+      const [w, h, label] = VARIANTS[k];
+      box.append(el('figure', {}, el('img', { src: variantThumb(variantState(state, w, h)), alt: '' }), `${w}×${h} ${label}`));
+    }
+    try { localStorage.setItem('thirdline:variants', JSON.stringify(wantedVariants())); } catch {}
+  }
+  try { for (const k of JSON.parse(localStorage.getItem('thirdline:variants') || '[]')) { const i = k === 'vertical' ? $('#varVertical') : $('#varSquare'); if (i) i.checked = true; } } catch {}
+  $('#varVertical').addEventListener('change', refreshVariantThumbs);
+  $('#varSquare').addEventListener('change', refreshVariantThumbs);
+  const withSuffix = (out, suf) => (/\.[a-z0-9]+$/i.test(out) ? out.replace(/(\.[a-z0-9]+)$/i, `-${suf}$1`) : `${out}-${suf}`);
+
   async function runExport() {
     const format = fmt();
     const out = await api.exporter.chooseDest(format, $('#exportName').value || 'lower-third');
     if (!out) return;
-    const snap = clone(state);
+    const jobs = [[clone(state), out], ...wantedVariants().map((k) => [variantState(state, VARIANTS[k][0], VARIANTS[k][1]), withSuffix(out, VARIANTS[k][2])])];
+    for (let j = 0; j < jobs.length; j++) {
+      const ok = await runExportJob(format, jobs[j][0], jobs[j][1], jobs.length > 1 ? `${j + 1}/${jobs.length} · ` : '');
+      if (!ok) break;
+    }
+  }
+  async function runExportJob(format, snap, out, prefix) {
     const bar = $('#exportProgress .bar'), label = $('#exportProgress span');
     $('#exportProgress').hidden = false; $('#exportError').hidden = true; $('#btnReveal').hidden = true;
     $('#btnExportGo').disabled = true; $('#btnExportCancel').textContent = 'Cancel';
@@ -3151,15 +3218,16 @@
       const res = await renderToFile(snap, format, out, (n, total) => {
         const pct = (n / total) * 100; bar.style.width = `${pct}%`;
         const el2 = (performance.now() - started) / 1000;
-        label.textContent = n === total ? 'Finalizing…' : `Frame ${n} / ${total} · ${Math.round(pct)}% · ${el2 > 1 ? Math.round((el2 / n) * (total - n)) + 's left' : ''}`;
+        label.textContent = n === total ? `${prefix}Finalizing…` : `${prefix}Frame ${n} / ${total} · ${Math.round(pct)}% · ${el2 > 1 ? Math.round((el2 / n) * (total - n)) + 's left' : ''}`;
       }, { bg: $('#exportBg').value, isCancelled: () => exportCancelled });
       lastOut = res.out;
-      label.textContent = `Done in ${((performance.now() - started) / 1000).toFixed(1)}s`;
+      label.textContent = `${prefix}Done in ${((performance.now() - started) / 1000).toFixed(1)}s`;
       $('#btnReveal').hidden = false;
-      toast('Export finished');
+      toast(`Export finished${prefix ? ` (${prefix.replace(/ · $/, '')})` : ''}`);
+      return true;
     } catch (err) {
-      if (err.message === 'cancelled') { label.textContent = 'Cancelled'; bar.style.width = '0'; }
-      else throw err;
+      if (err.message === 'cancelled') { label.textContent = 'Cancelled'; bar.style.width = '0'; return false; }
+      throw err;
     } finally {
       $('#btnExportGo').disabled = false; $('#btnExportCancel').textContent = 'Close';
     }
@@ -3491,7 +3559,7 @@
     drawTimeline();
     refreshGallery();
     window.__l3rd = { get state() { return state; }, setTime, replaceState, render: drawPreview, selectLayer, addLayer, loadCSV, openBatch, openMogrt,
-      selKeyCount: () => selKeys.length, multiSel: () => multiSel.slice(), motionPath: () => motionPath(),
+      selKeyCount: () => selKeys.length, multiSel: () => multiSel.slice(), motionPath: () => motionPath(), variantState: (st, w, h) => variantState(st, w, h),
       selectAllKeysOf: (path) => { selKeys = (state.keys[path] || []).map((k) => ({ path, k })); selKey = selKeys[selKeys.length - 1] || null; updateKeyBar(); drawTimeline(); }, selKeyTimes: () => selKeys.map((s) => s.k.t),
       tlDebug: () => { const g = tlGeom(); return { rows: timelineRows(), left: TL.left, right: TL.right, w: g.w, span: g.span, t0: g.t0, z: tlView.z }; } };
     setTimeout(() => checkUpdates(false).catch(() => {}), 3000);
