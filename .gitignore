@@ -3,3 +3,6 @@ dist/
 test/out/
 test/*.png
 test/out3/
+/*.png
+test/out2/
+test/out4/

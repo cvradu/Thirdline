@@ -5,9 +5,10 @@ const { chromium } = require('playwright');
   const errs = []; p.on('pageerror', (e) => errs.push(e.message));
   await p.goto('file://' + require('path').resolve(__dirname, '../src/index.html'));
   await p.waitForTimeout(800);
+  await p.click('#modeAdv'); await p.waitForTimeout(200);
   const box = await p.locator('#timeline').boundingBox();
   const geo = await p.evaluate(() => { const s = window.__l3rd.state; return { D: s.comp.duration, a: s.title.anim }; });
-  const W = box.width, L = 86, R = 16;
+  const W = box.width, L = 150, R = 16;
   const sx = (t) => box.x + L + (t / geo.D) * (W - L - R);
   const y = box.y + 22 + 6 + 28 * 1 + 10; // title row
   const inMid = sx(geo.a.in.delay + geo.a.in.duration * 0.6);

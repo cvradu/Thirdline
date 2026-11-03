@@ -7,7 +7,7 @@ const SHOT = process.env.SHOT || '.';
   const errs = []; p.on('pageerror', (e) => errs.push(e.message));
   await p.goto('file://' + require('path').resolve(__dirname, '../src/index.html'));
   await p.waitForTimeout(800);
-  await p.check('#optAdvanced'); await p.waitForTimeout(200);
+  await p.click('#modeAdv'); await p.waitForTimeout(200);
   const S = () => p.evaluate(() => JSON.parse(JSON.stringify(window.__l3rd.state)));
   let st = await S();
   let box = await p.locator('#timeline').boundingBox();
@@ -15,13 +15,13 @@ const SHOT = process.env.SHOT || '.';
   const rowY = (i) => box.y + 22 + 6 + 28 * i + 11;
   // 1. right-click the backdrop in ramp → menu → Overshoot
   const a = st.backdrop.anim;
-  await p.mouse.click(sx(a.in.delay + a.in.duration * 0.5), rowY(0), { button: 'right' });
+  await p.mouse.click(sx(a.in.delay + a.in.duration * 0.5), rowY(2), { button: 'right' });
   console.log('menu visible', await p.isVisible('.ctxmenu'), 'title', await p.textContent('.ctx-title'));
   await p.screenshot({ path: `${SHOT}/ctx.png` });
   await p.click('.ctxmenu button:has-text("Overshoot")');
   st = await S(); console.log('backdrop in easing', st.backdrop.anim.in.easing, 'menu hidden', await p.isHidden('.ctxmenu'));
   // 2. double-click the same ramp → graph editor; drag handle 2
-  await p.mouse.dblclick(sx(a.in.delay + a.in.duration * 0.5), rowY(0));
+  await p.mouse.dblclick(sx(a.in.delay + a.in.duration * 0.5), rowY(2));
   console.log('graph open', await p.evaluate(() => document.querySelector('#graphDialog').open), await p.inputValue('#gEase'), await p.inputValue('#gX2'), await p.inputValue('#gY2'));
   const gb = await p.locator('#graphCanvas').boundingBox();
   // find handle 2 position via inputs is hard; drag from where it is: compute using same geometry in page

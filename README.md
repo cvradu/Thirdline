@@ -2,6 +2,8 @@
 
 A desktop app for designing animated lower thirds and exporting them with a transparent background.
 
+The app has two modes. **Easy** walks you through three steps (pick a style, type your text, choose how it moves) with no animation knowledge needed. **Advanced** gives animators layers, keyframes, a graph editor and a timeline.
+
 - **Text:** title and subtitle lines, 12 bundled fonts (Inter, Montserrat, Poppins, Oswald, Anton, Bebas Neue, Playfair Display and more), system fonts, or upload your own `.ttf/.otf/.woff/.woff2` (uploaded fonts are remembered).
 - **Backdrop:** 9 shapes (rectangle, rounded, pill, slanted, box + accent bar, two-tone stack, underline, side bar, corner brackets) with gradient, opacity, padding, shadow, or upload a PNG/JPG/SVG image backdrop.
 - **Animation:** separate in and out animations for backdrop, title and subtitle (18 backdrop animations, 21 text animations including per-letter and per-word reveals, typewriter and mask reveals), 20 easing curves plus a draggable custom bezier.
@@ -19,6 +21,14 @@ A desktop app for designing animated lower thirds and exporting them with a tran
 - **Text animators:** After Effects-style animators on the title and subtitle. A range selector (start / end / offset / amount, by characters or words, with square/ramp/triangle/round/smooth shapes) drives position, scale, rotation, opacity, blur, tracking and fill colour per letter. Presets (fade, rise, drop, pop, blur words, tracking, colour sweep, wave) add the keyframes for you.
 - **Motion blur:** shutter angle and quality settings; rendered with floating-point accumulation on export, optional preview.
 - **Presets / styles:** 7 built-in styles, save your own, import/share preset files. Undo/redo and autosave.
+- **More layers (Advanced):** add extra text lines, a logo image, accent bars and other shapes. Drag layers in the list to reorder them, and use the eye to hide one.
+- **Text styling:** tracking, line height, outline (stroke), glow, drop shadow, and auto-fit so long names shrink to fit a maximum width.
+- **Hold and loop:** in Easy mode, drag the In / Hold / Out bar to set how long the graphic stays on screen.
+- **Preview over footage:** choose "Preview on" > your own video or image (or drop one on the preview) to see the lower third over real footage. Footage is never exported.
+- **Templates and batch export:** File > Batch export. Load a CSV of names and titles, match columns to text layers, and render one file per row.
+- **Export presets:** pick "Made for" Premiere Pro, DaVinci Resolve, Final Cut Pro or the web, and the format and settings are set for you. (Adobe's .mogrt format can only be made by After Effects / Premiere, so Thirdline exports ProRes 4444 with alpha instead.)
+- **Live output for OBS:** press Go live, then add `http://127.0.0.1:7461/live` as a Browser Source in OBS. Trigger it with the In / Out buttons, or from a Stream Deck / Companion with HTTP calls to `/cue/in`, `/cue/out`, `/cue/toggle`.
+- **Updates:** the app checks GitHub for a new release on start and shows an "Update" pill that downloads the new installer.
 - **Export (ffmpeg is bundled):** MOV ProRes 4444 with alpha, WebM VP9 with alpha, PNG sequence with alpha, MP4 H.264 over a solid colour.
 
 ## Run it

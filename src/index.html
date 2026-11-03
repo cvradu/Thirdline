@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; font-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'" />
   <title>Thirdline</title>
   <link rel="stylesheet" href="fonts/fonts.css" />
   <link rel="stylesheet" href="styles.css" />
@@ -10,74 +10,111 @@
 <body>
   <header class="topbar">
     <div class="brand"><span class="logo">▁▃</span> Thirdline</div>
-    <div class="topbar-group">
-      <button id="btnNew" title="New project (Cmd/Ctrl+N)">New</button>
-      <button id="btnOpen" title="Open a .l3rd project (Cmd/Ctrl+O)">Open…</button>
-      <button id="btnSave" title="Save project as .l3rd (Cmd/Ctrl+S)">Save</button>
-      <span class="docname" id="docName">Untitled</span>
+    <div class="menu-wrap">
+      <button id="btnFile" class="ghost" title="New, open, save, batch export, live output">File ▾</button>
+      <div class="dropdown" id="fileMenu" hidden>
+        <button id="btnNew">New project <kbd>⌘N</kbd></button>
+        <button id="btnOpen">Open… <kbd>⌘O</kbd></button>
+        <button id="btnSave">Save <kbd>⌘S</kbd></button>
+        <button id="btnSaveAs">Save as…</button>
+        <hr />
+        <button id="btnSavePreset">Save design as a style…</button>
+        <button id="btnBatch">Batch export from a spreadsheet (CSV)…</button>
+        <button id="btnLiveMenu">Live output for OBS…</button>
+        <hr />
+        <button id="btnUpdates">Check for updates…</button>
+      </div>
     </div>
-    <div class="topbar-group">
-      <label class="lbl">Style</label>
-      <select id="presetSelect"></select>
-      <button id="btnSavePreset" title="Save the current design to your style list">Save style</button>
-      <button id="btnDeletePreset" title="Delete selected saved style">Delete</button>
+    <span class="docname" id="docName">Untitled</span>
+    <a class="update-pill" id="updatePill" hidden></a>
+    <span class="spacer"></span>
+    <div class="mode-switch" role="tablist" title="Easy: pick, type, export. Advanced: layers, keyframes and the full timeline.">
+      <button id="modeEasy" class="on">Easy</button><button id="modeAdv">Advanced</button>
     </div>
-    <div class="topbar-group">
-      <label class="chk adv-toggle" title="Show keyframe controls, layer transforms, masks and text animators"><input type="checkbox" id="optAdvanced" /> Advanced</label>
-      <button id="btnUndo" title="Undo (Ctrl/Cmd+Z)">↶</button>
-      <button id="btnRedo" title="Redo (Ctrl/Cmd+Shift+Z)">↷</button>
-      <button id="btnExport" class="primary">Export…</button>
-    </div>
+    <input type="checkbox" id="optAdvanced" hidden />
+    <button id="btnUndo" class="icon" title="Undo (Ctrl/Cmd+Z)">↶</button>
+    <button id="btnRedo" class="icon" title="Redo (Ctrl/Cmd+Shift+Z)">↷</button>
+    <button id="btnExport" class="primary">Export…</button>
   </header>
 
   <main class="workspace">
     <aside class="panel" id="leftPanel">
-      <nav class="tabs" data-for="left">
-        <button data-tab="text" class="active">Text</button>
-        <button data-tab="backdrop">Backdrop</button>
-        <button data-tab="layout">Layout</button>
-      </nav>
-      <div class="tab-body" id="leftBody"></div>
+      <div class="easy-only scroll" id="easyLeft">
+        <div class="step"><h3><b>1</b>Pick a style</h3>
+          <div class="styles" id="styleGallery"></div>
+        </div>
+      </div>
+      <div class="adv-only scroll" id="advLeft">
+        <div class="pane">
+          <h3>Layers <span class="spacer"></span>
+            <span class="menu-wrap"><button id="btnAddLayer" class="link">+ Add</button>
+              <div class="dropdown" id="addMenu" hidden>
+                <button data-add="text">Text</button>
+                <button data-add="image">Logo / image…</button>
+                <button data-add="bar">Accent bar</button>
+                <button data-add="line">Line</button>
+                <button data-add="ellipse">Circle / dot</button>
+                <button data-add="rect">Rectangle</button>
+              </div>
+            </span>
+          </h3>
+          <div id="layerList" class="layer-list"></div>
+          <div class="sub">Drag to reorder. Click the eye to hide a layer.</div>
+        </div>
+        <div class="pane">
+          <h3>Animation presets</h3>
+          <div id="animLib" class="lib"></div>
+          <div class="sub">Click to use as the selected layer’s <b>in</b> animation, Shift+click for <b>out</b>.</div>
+        </div>
+      </div>
     </aside>
 
     <section class="stage">
       <div class="stage-toolbar">
-        <label class="lbl">Background</label>
+        <label class="lbl">Preview on</label>
         <select id="bgMode">
           <option value="checker">Checkerboard</option>
-          <option value="dark">Dark</option>
+          <option value="dark">Black</option>
           <option value="mid">Grey</option>
-          <option value="light">Light</option>
-          <option value="green">Green</option>
-          <option value="custom">Custom colour…</option>
-          <option value="image">Reference image…</option>
+          <option value="light">White</option>
+          <option value="green">Green screen</option>
+          <option value="custom">Colour…</option>
+          <option value="footage">My footage or photo…</option>
         </select>
-        <input type="file" id="bgFile" accept="image/*" hidden />
+        <input type="file" id="bgFile" accept="image/*,video/*" hidden />
         <input type="color" id="bgColor" value="#1e3a8a" hidden title="Preview background colour" />
-        <div class="layer-chips" title="Select a layer (or click it in the preview)">
-          <button data-layer="backdrop">Backdrop</button><button data-layer="title">Title</button><button data-layer="subtitle">Subtitle</button>
-        </div>
         <label class="chk"><input type="checkbox" id="optSafe" checked /> Safe areas</label>
-        <label class="chk"><input type="checkbox" id="optBounds" /> Bounds</label>
-        <span class="hint">Click a layer to edit it · drag to move</span>
+        <label class="chk adv-only"><input type="checkbox" id="optBounds" /> Bounds</label>
+        <label class="chk adv-only" title="Motion blur (applied when exporting)"><input type="checkbox" id="optMB" /> Motion blur</label>
+        <span class="spacer"></span>
+        <button id="btnLive" class="live-btn" title="Send this lower third to OBS as a browser source">● Go live</button>
       </div>
       <div class="viewport" id="viewport">
         <div class="frame" id="frame">
           <div class="frame-bg" id="frameBg"></div>
+          <video id="bgVideo" muted loop playsinline hidden></video>
           <canvas id="preview"></canvas>
         </div>
+        <div class="drop-hint" id="dropHint" hidden>Drop a video or photo to preview over it</div>
       </div>
       <div class="transport">
-        <button id="btnStart" title="Go to start (Home)">⏮</button>
-        <button id="btnPrevFrame" title="Previous frame (←)">◀︎|</button>
         <button id="btnPlay" class="play" title="Play / pause (Space)">▶</button>
-        <button id="btnNextFrame" title="Next frame (→)">|▶︎</button>
-        <button id="btnHold" title="Jump to the fully-on frame">Hold</button>
-        <label class="chk"><input type="checkbox" id="optLoop" checked /> Loop</label>
+        <span class="adv-only tgroup">
+          <button id="btnStart" title="Go to start (Home)">⏮</button>
+          <button id="btnPrevFrame" title="Previous frame (←)">◀︎|</button>
+          <button id="btnNextFrame" title="Next frame (→)">|▶︎</button>
+          <button id="btnHold" title="Jump to the fully-on frame">Hold</button>
+        </span>
+        <div class="easy-only phasebar" id="phaseBar" title="Drag the edges of In and Out to make the animation faster or slower">
+          <div class="ph-in"><span>In</span></div><div class="ph-hold"><span></span></div><div class="ph-out"><span>Out</span></div>
+          <i class="ph-head"></i>
+        </div>
+        <input type="range" id="scrub" class="adv-only" min="0" max="1" step="0.0001" value="0" />
         <span class="timecode" id="timecode">00:00:00</span>
-        <input type="range" id="scrub" min="0" max="1" step="0.0001" value="0" />
+        <label class="chk"><input type="checkbox" id="optLoop" checked /> Loop</label>
       </div>
-      <div class="keybar" id="keyBar" hidden>
+      <div class="easy-only sub phase-tip">Drag the edges of “In” and “Out” to make the animation faster or slower, or the middle to change how long it stays on screen.</div>
+      <div class="keybar adv-only" id="keyBar" hidden>
         <b id="kbLabel"></b>
         <span id="kbKeyCtl" class="kbgroup">
           <span class="muted">at</span> <span id="kbTime" class="timecode" style="min-width:0"></span>
@@ -94,16 +131,12 @@
         <button id="kbPrev" title="Previous keyframe (J)">◀◆</button><button id="kbNext" title="Next keyframe (K)">◆▶</button>
         <button id="kbDelete" title="Delete keyframe (Delete)">Delete</button>
       </div>
-      <canvas id="timeline" height="120"></canvas>
+      <canvas id="timeline" class="adv-only" height="120"></canvas>
     </section>
 
     <aside class="panel" id="rightPanel">
-      <nav class="tabs" data-for="right">
-        <button data-tab="anim-backdrop" class="active">Backdrop anim</button>
-        <button data-tab="anim-title">Title anim</button>
-        <button data-tab="anim-subtitle">Subtitle anim</button>
-      </nav>
-      <div class="tab-body" id="rightBody"></div>
+      <div class="easy-only scroll" id="easyRight"></div>
+      <div class="adv-only scroll" id="inspector"></div>
     </aside>
   </main>
 
@@ -130,6 +163,16 @@
   <dialog id="exportDialog">
     <form method="dialog" class="modal">
       <h2>Export</h2>
+      <div class="row"><label>Made for</label><select id="exportFor">
+        <option value="premiere">Premiere Pro</option>
+        <option value="resolve">DaVinci Resolve</option>
+        <option value="fcp">Final Cut Pro</option>
+        <option value="ae">After Effects</option>
+        <option value="obs">OBS, vMix or the web</option>
+        <option value="social">Social video (no transparency)</option>
+        <option value="custom">Something else</option>
+      </select></div>
+      <p class="sub" id="exportTip"></p>
       <div class="formats" id="formatList">
         <label><input type="radio" name="fmt" value="prores" checked /> <b>MOV · ProRes 4444</b><small>Alpha channel. Best for Premiere, Final Cut, Resolve, After Effects.</small></label>
         <label><input type="radio" name="fmt" value="webm" /> <b>WebM · VP9</b><small>Alpha channel. Small files, for web players, OBS and browsers.</small></label>
@@ -137,6 +180,9 @@
         <label><input type="radio" name="fmt" value="mp4" /> <b>MP4 · H.264</b><small>No alpha. Rendered over the colour below.</small></label>
       </div>
       <div class="row"><label>File name</label><input type="text" id="exportName" value="lower-third" /></div>
+      <div class="row"><label>Frame rate</label><select id="exportFps">
+        <option>23.976</option><option>24</option><option>25</option><option>29.97</option><option>30</option><option>50</option><option>59.94</option><option>60</option>
+      </select></div>
       <div class="row" id="mp4BgRow"><label>Background (MP4)</label><input type="color" id="exportBg" value="#00b140" /></div>
       <p class="muted" id="exportSummary"></p>
       <div class="progress" id="exportProgress" hidden><div class="bar"></div><span></span></div>
@@ -149,11 +195,58 @@
     </form>
   </dialog>
 
+  <dialog id="batchDialog">
+    <form method="dialog" class="modal">
+      <h2>Batch export from a spreadsheet</h2>
+      <p class="sub">One video per row. Make a CSV in Excel, Numbers or Google Sheets (File → Download → CSV) with a column for names and one for titles.</p>
+      <div class="btnrow"><button type="button" id="batchPick">Choose CSV file…</button> <span class="sub" id="batchFile" style="margin:0;align-self:center"></span></div>
+      <div id="batchMap" class="map-grid"></div>
+      <div class="batch-list" id="batchList" hidden></div>
+      <div class="row" style="margin-top:12px"><label>Format</label><select id="batchFmt">
+        <option value="prores">MOV · ProRes 4444 (alpha)</option><option value="webm">WebM (alpha)</option><option value="png">PNG sequence (alpha)</option><option value="mp4">MP4 (no alpha)</option>
+      </select></div>
+      <div class="progress" id="batchProgress" hidden><div class="bar"></div><span></span></div>
+      <p class="error" id="batchError" hidden></p>
+      <div class="actions">
+        <button type="button" id="batchClose">Close</button>
+        <button type="button" id="batchReveal" hidden>Show folder</button>
+        <button type="button" id="batchGo" class="primary" disabled>Choose folder &amp; export</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="liveDialog">
+    <form method="dialog" class="modal live-box">
+      <h2>Live output for OBS</h2>
+      <p class="sub" id="liveState">Live output is off.</p>
+      <div id="liveOn" hidden>
+        <ol class="sub" style="padding-left:18px;line-height:1.6">
+          <li>In OBS, add a <b>Browser</b> source.</li>
+          <li>Paste this URL, and set the width and height to <span id="liveSize"></span>.</li>
+          <li>Use the buttons below (or a Stream Deck) to bring it in and out.</li>
+        </ol>
+        <code id="liveUrl" class="copy"></code>
+        <div class="cues">
+          <button type="button" class="primary" data-cue="in">▶ In</button>
+          <button type="button" data-cue="out">Out ◼</button>
+          <button type="button" data-cue="play" title="Play the whole animation once">Play once</button>
+          <button type="button" data-cue="cut" title="Clear immediately">Clear</button>
+        </div>
+        <p class="sub">Stream Deck or Bitfocus Companion: send an HTTP GET to <code id="liveCueUrl" class="copy" style="display:inline;padding:1px 4px"></code>. Your changes in Thirdline show up live. While it’s in, the on-screen part keeps looping.</p>
+      </div>
+      <div class="actions">
+        <button type="button" id="liveStop" hidden>Turn off</button>
+        <button type="button" id="liveClose">Close</button>
+        <button type="button" id="liveStart" class="primary">Turn on live output</button>
+      </div>
+    </form>
+  </dialog>
+
   <div id="toast" class="toast" hidden></div>
 
   <script src="easing.js"></script>
   <script src="engine.js"></script>
   <script src="presets.js"></script>
+  <script src="batch.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

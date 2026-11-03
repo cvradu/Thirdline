@@ -936,7 +936,7 @@
 
     for (const id of layerOrder(state)) {
       if (id === 'backdrop') {
-        if (bd.type === 'none') continue;
+        if (bd.type === 'none' || bd.visible === false) continue;
         const ph = phaseAt(bd.anim, t, duration);
         if (!ph.visible) continue;
         const type = effType(ph);
@@ -956,7 +956,7 @@
         });
       } else if (id === 'title' || id === 'subtitle') {
         const ph = phaseAt(state[id].anim, t, duration);
-        if (!ph.visible || L[id].empty) continue;
+        if (!ph.visible || L[id].empty || state[id].visible === false) continue;
         withMask(ctx, state, id, (c) => drawText(c, state[id], L[id], ph, L, state));
       } else {
         const ly = state.layers && state.layers[id], eb = L.extras[id];
@@ -1043,9 +1043,9 @@
   function layerBounds(state, L) {
     const tb = (line, s) => (line.empty ? null : { x: line.x - 4, y: line.top - s.size * 0.12, w: line.width + 8, h: (line.bottom - line.top) + s.size * 0.24 });
     const out = {
-      title: tb(L.title, state.title),
-      subtitle: tb(L.subtitle, state.subtitle),
-      backdrop: state.backdrop.type === 'none' ? null : { ...L.box },
+      title: state.title.visible === false ? null : tb(L.title, state.title),
+      subtitle: state.subtitle.visible === false ? null : tb(L.subtitle, state.subtitle),
+      backdrop: state.backdrop.type === 'none' || state.backdrop.visible === false ? null : { ...L.box },
     };
     const eb = L.extras || {};
     for (const [id, b] of Object.entries(eb)) if (state.layers[id] && state.layers[id].visible !== false) out[id] = { x: b.x, y: b.y, w: b.w, h: b.h };

@@ -14,9 +14,9 @@ const { chromium } = require('playwright');
     await p.locator('#frame').screenshot({ path: `g${i}.png` });
   }
   // texture
-  await p.click('nav[data-for=left] button[data-tab=backdrop]');
-  await p.selectOption('[data-pane=backdrop] .row:has-text("Fill") select', 'linear').catch((e) => errs.push('sel ' + e.message));
-  const sel = p.locator('[data-pane=backdrop] select').filter({ has: p.locator('option[value=halftone]') });
+  await p.click('#modeAdv'); await p.click('.layer-row[data-layer=backdrop]'); await p.evaluate(() => document.querySelectorAll('#inspector .section.collapsed').forEach((x) => x.classList.remove('collapsed')));
+  await p.selectOption('#inspector .row:has-text("Fill") select >> nth=0', 'linear').catch((e) => errs.push('sel ' + e.message));
+  const sel = p.locator('#inspector select').filter({ has: p.locator('option[value=halftone]') });
   await sel.selectOption('halftone');
   await p.waitForTimeout(300);
   await p.evaluate(() => { const s = window.__l3rd.state; s.backdrop.texture.blend = 'soft-light'; s.backdrop.texture.opacity = 0.8; window.__l3rd.replaceState(s); window.__l3rd.setTime(3); });

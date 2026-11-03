@@ -13,6 +13,8 @@
   function defaultState() {
     return {
       keys: {},
+      // Easy-mode choices (motion recipe, speed, size step, position) so the controls show what was picked.
+      ui: { motion: '', speed: 'normal', size: 'M', pos: 'bl' },
       version: 1,
       layers: {},
       order: ['backdrop', 'title', 'subtitle'],

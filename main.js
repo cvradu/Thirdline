@@ -209,6 +209,17 @@ function startJob({ format, out, width, height, fps }) {
   jobs.set(id, job);
   return id;
 }
+// Batch export: one folder, a file per row.
+ipcMain.handle('export:chooseFolder', async () => {
+  const r = await dialog.showOpenDialog(win, { title: 'Choose a folder for the exported files', properties: ['openDirectory', 'createDirectory'] });
+  return r.canceled || !r.filePaths[0] ? null : r.filePaths[0];
+});
+ipcMain.handle('export:pathIn', (_e, dir, name, format) => {
+  const f = FORMATS[format];
+  if (!f) throw new Error('Unknown format');
+  const safe = String(name).replace(/[\\/:*?"<>|\u0000-\u001f]+/g, '').trim() || 'lower-third';
+  return path.join(dir, f.ext ? `${safe}.${f.ext}` : safe);
+});
 ipcMain.handle('export:start', (_e, opts) => startJob(opts));
 ipcMain.handle('export:frame', (_e, id, data) => {
   const job = jobs.get(id);

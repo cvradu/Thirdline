@@ -11,12 +11,12 @@ const { chromium } = require('playwright');
   // walk all presets at hold frame
   const n = await p.evaluate(() => Presets.BUILTIN.length);
   for (let i = 0; i < n; i++) {
-    await p.selectOption('#presetSelect', `b:${i}`);
+    await p.click(`.st:nth-child(${i + 1})`);
     await p.waitForTimeout(300);
     await p.locator('#frame').screenshot({ path: `preset-${i}.png` });
   }
   // frames through time for default
-  await p.selectOption('#presetSelect', 'b:0');
+  await p.click('.st:nth-child(1)');
   for (const t of [0.2, 0.5, 0.8, 1.2, 5.6, 5.85]) {
     await p.evaluate((t) => window.__l3rd.setTime(t), t);
     await p.locator('#frame').screenshot({ path: `t-${t}.png` });

@@ -6,7 +6,7 @@ const { chromium } = require('playwright');
   const errs = []; p.on('pageerror', (e) => errs.push(e.message));
   await p.goto('file://' + require('path').resolve(__dirname, '../src/index.html'));
   await p.waitForTimeout(800);
-  await p.check('#optAdvanced'); await p.waitForTimeout(200);
+  await p.click('#modeAdv'); await p.waitForTimeout(200);
   const S = () => p.evaluate(() => JSON.parse(JSON.stringify(window.__l3rd.state)));
   let st = await S();
   let box = await p.locator('#timeline').boundingBox();
@@ -29,7 +29,7 @@ const { chromium } = require('playwright');
   await p.locator('#timeline').screenshot({ path: '/tmp/claude-0/-home-claude/d19f8194-2735-5d21-936e-97ff9400c04c/scratchpad/tl-adv.png' });
   // 5. subtitle bar is now pushed down; click subtitle out ramp and delete it with the Delete key
   const nKeys = Object.keys(st.keys).length; box = await p.locator('#timeline').boundingBox();
-  const subY = box.y + 22 + 6 + 28 * 2 + nKeys * 18 + 4 + 11;
+  const subY = box.y + 22 + 6 + 11; // subtitle is the top row (top layer first)
   const so = st.subtitle.anim; const D = st.comp.duration;
   const cx = sx(D - so.out.offset - so.out.duration * 0.5);
   await p.mouse.click(cx, subY);

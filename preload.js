@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('api', {
   },
   exporter: {
     chooseDest: (format, baseName) => ipcRenderer.invoke('export:chooseDest', format, baseName),
+    chooseFolder: () => ipcRenderer.invoke('export:chooseFolder'),
+    pathIn: (dir, name, format) => ipcRenderer.invoke('export:pathIn', dir, name, format),
     start: (opts) => ipcRenderer.invoke('export:start', opts),
     frame: (id, data) => ipcRenderer.invoke('export:frame', id, data),
     finish: (id) => ipcRenderer.invoke('export:finish', id),

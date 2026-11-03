@@ -117,6 +117,7 @@
     drawPreview();
     resizeTimeline();
     updateKeyBar();
+    if (typeof pushLive === 'function') pushLive();
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => { try { localStorage.setItem('l3rd:last', JSON.stringify(state)); } catch {} }, 400);
     if (record) {
@@ -139,6 +140,25 @@
 
   // ---------- Keyframes ----------
   const LAYER_NAMES = { backdrop: 'Backdrop', title: 'Title', subtitle: 'Subtitle', layout: 'Position', comp: 'Canvas' };
+  // Layers: the three built-ins live at state.backdrop/title/subtitle, extra layers at state.layers[id].
+  const BUILTIN_IDS = ['backdrop', 'title', 'subtitle'];
+  const isExtra = (k) => !!(k && state.layers && state.layers[k]);
+  const pp = (k) => (isExtra(k) ? `layers.${k}` : k); // path prefix of a layer
+  const lay = (k) => Engine.getLayer(state, k);
+  const pathLayer = (p) => { const a = p.split('.'); return a[0] === 'layers' ? a[1] : a[0]; };
+  const KIND_COLOR = { text: '#a78bfa', image: '#ec4899', shape: '#ef4444' };
+  function layerName(k) {
+    if (LAYER_NAMES[k]) return LAYER_NAMES[k];
+    const l = state.layers && state.layers[k];
+    return l ? (l.name || Engine.EXTRA_KINDS[l.kind] || 'Layer') : k;
+  }
+  function layerColor(k) {
+    const l = state.layers && state.layers[k];
+    if (l && l.kind === 'shape' && /^#[0-9a-f]{6}$/i.test(l.color || '')) return l.color;
+    return { backdrop: '#3b82f6', title: '#f59e0b', subtitle: '#22c55e' }[k] || (l ? KIND_COLOR[l.kind] || '#a78bfa' : null);
+  }
+  // Top layer first, like the After Effects timeline.
+  const tracks = () => Engine.layerOrder(state).slice().reverse().map((k) => [k, layerName(k), layerColor(k)]);
   const keyLabels = {};
   let selKey = null; // { path, k } (k = keyframe object)
   const fpsT = (t) => Math.round(t * state.comp.fps) / state.comp.fps;
@@ -183,8 +203,12 @@
   function setAdvanced(on) {
     advanced = on; document.body.classList.toggle('advanced', on);
     $('#optAdvanced').checked = on;
+    $('#modeEasy').classList.toggle('on', !on); $('#modeAdv').classList.toggle('on', on);
     try { localStorage.setItem('thirdline:advanced', on ? '1' : '0'); } catch {}
+    if (!on) { selKey = null; selPreset = null; }
     resizeTimeline();
+    if (typeof fitFrame === 'function') requestAnimationFrame(fitFrame);
+    if (!on) refreshGallery();
   }
 
   // Recently used colours (shared by every colour control)
@@ -219,8 +243,7 @@
     const ctl = el('div', { class: 'ctl' });
     let kf = null;
     if (def.key) {
-      const layer = def.path.split('.')[0];
-      keyLabels[def.path] = `${LAYER_NAMES[layer] || layer} · ${def.keyLabel || def.label}`;
+      keyLabels[def.path] = def.keyLabel || def.label;
       kf = el('button', { type: 'button', class: 'kf', title: 'Keyframe: add/remove a keyframe at the playhead', onclick: () => toggleKey(def.path) });
     }
     const r = el('div', { class: 'row' + (def.key ? ' keyable' : '') }, el('label', {}, kf, def.label), ctl);
@@ -323,7 +346,11 @@
   let currentOwner = null;
   const structureSyncs = [];
   function syncControls() { for (const f of structureSyncs) f(); for (const c of controls) c.sync(); }
-  function dropControls(owner) { for (let i = controls.length - 1; i >= 0; i--) if (controls[i].owner === owner) controls.splice(i, 1); }
+  function dropControls(owner) {
+    for (let i = controls.length - 1; i >= 0; i--) if (controls[i].owner === owner) controls.splice(i, 1);
+    for (let i = structureSyncs.length - 1; i >= 0; i--) if (structureSyncs[i].owner === owner) structureSyncs.splice(i, 1);
+  }
+  const addStructureSync = (f) => { f.owner = currentOwner; structureSyncs.push(f); };
   function syncKeyable() { for (const c of controls) if (c.def.key) c.sync(); }
   function refreshVisibility() {
     for (const c of controls) if (c.def.show) c.rowEl.classList.toggle('hidden', !c.def.show(state));
@@ -336,11 +363,11 @@
     { group: 'System', items: SYSTEM_FONTS.map((f) => [f, f]) },
   ];
   const weightOptions = (key) => () => {
-    const fam = state[key].font;
+    const fam = lay(key).font;
     const ws = BUILTIN_FONTS[fam] || [100, 200, 300, 400, 500, 600, 700, 800, 900];
     const names = { 100: 'Thin', 200: 'Extra Light', 300: 'Light', 400: 'Regular', 500: 'Medium', 600: 'Semibold', 700: 'Bold', 800: 'Extra Bold', 900: 'Black' };
     const list = ws.map((w) => [String(w), `${w} · ${names[w]}`]);
-    if (!ws.includes(+state[key].weight)) list.push([String(state[key].weight), String(state[key].weight)]);
+    if (!ws.includes(+lay(key).weight)) list.push([String(lay(key).weight), String(lay(key).weight)]);
     return list;
   };
 
@@ -349,8 +376,8 @@
     let last = null;
     for (const f of fonts) last = (await addUserFont(f)) || last;
     if (last) {
-      state[key].font = last;
-      state[key].weight = 400;
+      lay(key).font = last;
+      lay(key).weight = 400;
       changed({ sync: true });
       toast(`Font “${last}” added`);
     }
@@ -371,15 +398,14 @@
       el('div', { class: 'sub' }, 'Justify spreads the letters of each line to fill the box. Set a Fixed or Min width on the Backdrop tab to control how wide.'),
     ]);
   }
-  const sectionRefs = {};
   function textSection(key, title) {
     sectionRefs[key] = null;
-    const p = (k) => `${key}.${k}`;
+    const p = (k) => `${pp(key)}.${k}`;
     const textual = key === 'title';
     return section(title, [
       row({ label: 'Text', type: 'text', path: p('text'), placeholder: textual ? 'Name' : 'Role / description' }),
       row({ label: 'Font', type: 'select', path: p('font'), options: fontOptions,
-        onSet: () => { const ws = BUILTIN_FONTS[state[key].font]; if (ws && !ws.includes(+state[key].weight)) state[key].weight = ws.reduce((a, b) => (Math.abs(b - state[key].weight) < Math.abs(a - state[key].weight) ? b : a)); syncControls(); },
+        onSet: () => { const ws = BUILTIN_FONTS[lay(key).font]; if (ws && !ws.includes(+lay(key).weight)) lay(key).weight = ws.reduce((a, b) => (Math.abs(b - lay(key).weight) < Math.abs(a - lay(key).weight) ? b : a)); syncControls(); },
         extra: () => [el('button', { type: 'button', title: 'Upload a .ttf/.otf/.woff font', onclick: () => uploadFont(key) }, 'Upload…')] }),
       row({ label: 'Weight', type: 'select', path: p('weight'), options: weightOptions(key), numeric: true }),
       row({ label: 'Size', type: 'range', path: p('size'), key: true, min: 8, max: 220, unit: 'px' }),
@@ -387,12 +413,29 @@
       row({ label: 'Letter spacing', type: 'range', path: p('letterSpacing'), key: true, min: -10, max: 40, step: 0.5, unit: 'px' }),
       row({ label: 'Style', type: 'checkbox', path: p('uppercase'), text: 'UPPERCASE' }),
       row({ label: '', type: 'checkbox', path: p('italic'), text: 'Italic' }),
-      row({ label: 'Mask to box', type: 'checkbox', path: p('clipToBox'), text: 'Clip text to backdrop' }),
+      isExtra(key) ? null : row({ label: 'Mask to box', type: 'checkbox', path: p('clipToBox'), text: 'Clip text to backdrop' }),
       row({ label: 'Text shadow', type: 'checkbox', path: p('shadow.on'), text: 'On' }),
-      row({ label: 'Shadow color', type: 'color', path: p('shadow.color'), key: true, swatches: false, show: (s) => s[key].shadow.on }),
-      row({ label: 'Shadow opacity', type: 'range', path: p('shadow.opacity'), key: true, min: 0, max: 100, scale: 100, unit: '%', show: (s) => s[key].shadow.on }),
-      row({ label: 'Shadow blur', type: 'range', path: p('shadow.blur'), key: true, min: 0, max: 60, show: (s) => s[key].shadow.on }),
-      row({ label: 'Shadow Y', type: 'range', path: p('shadow.offsetY'), min: -30, max: 30, show: (s) => s[key].shadow.on }),
+      row({ label: 'Shadow color', type: 'color', path: p('shadow.color'), key: true, swatches: false, show: (s) => lay(key).shadow.on }),
+      row({ label: 'Shadow opacity', type: 'range', path: p('shadow.opacity'), key: true, min: 0, max: 100, scale: 100, unit: '%', show: (s) => lay(key).shadow.on }),
+      row({ label: 'Shadow blur', type: 'range', path: p('shadow.blur'), key: true, min: 0, max: 60, show: (s) => lay(key).shadow.on }),
+      row({ label: 'Shadow X', type: 'range', path: p('shadow.offsetX'), min: -30, max: 30, show: (s) => lay(key).shadow.on }),
+      row({ label: 'Shadow Y', type: 'range', path: p('shadow.offsetY'), min: -30, max: 30, show: (s) => lay(key).shadow.on }),
+    ].filter(Boolean));
+  }
+  // Outline, glow and auto-fit for a text layer.
+  function effectsSection(key, title = 'Outline, glow & fit') {
+    const p = (k) => `${pp(key)}.${k}`;
+    return section(title, [
+      row({ label: 'Outline', type: 'checkbox', path: p('stroke.on'), text: 'On' }),
+      row({ label: 'Outline width', type: 'range', path: p('stroke.width'), key: true, min: 0.5, max: 20, step: 0.5, unit: 'px', show: () => lay(key).stroke.on }),
+      row({ label: 'Outline colour', type: 'color', path: p('stroke.color'), key: true, swatches: false, show: () => lay(key).stroke.on }),
+      row({ label: 'Glow', type: 'checkbox', path: p('glow.on'), text: 'On' }),
+      row({ label: 'Glow colour', type: 'color', path: p('glow.color'), key: true, swatches: false, show: () => lay(key).glow.on }),
+      row({ label: 'Glow size', type: 'range', path: p('glow.size'), key: true, min: 1, max: 80, unit: 'px', show: () => lay(key).glow.on }),
+      row({ label: 'Glow strength', type: 'range', path: p('glow.strength'), min: 1, max: 4, show: () => lay(key).glow.on }),
+      row({ label: 'Glow opacity', type: 'range', path: p('glow.opacity'), key: true, min: 0, max: 100, scale: 100, unit: '%', show: () => lay(key).glow.on }),
+      row({ label: 'Auto-fit', type: 'checkbox', path: p('fitWidth'), text: 'Shrink long text to fit', onSet: (v) => { setPath(state, p('fitWidth'), v ? 900 : 0); changed({ sync: true }); } }),
+      row({ label: 'Max width', type: 'range', path: p('fitWidth'), min: 100, max: 1900, unit: 'px', show: () => lay(key).fitWidth > 0 }),
     ]);
   }
 
@@ -553,22 +596,26 @@
   function placeAt(where) {
     const { width: W, height: H } = state.comp;
     const L = state.layout;
-    const m = 0.05; // title-safe margin
-    const map = {
-      bl: ['left', 'bottom', W * m, H * (1 - m) - H * 0.05],
-      bc: ['center', 'bottom', W / 2, H * (1 - m) - H * 0.05],
-      br: ['right', 'bottom', W * (1 - m), H * (1 - m) - H * 0.05],
-      tl: ['left', 'top', W * m, H * m],
-      tr: ['right', 'top', W * (1 - m), H * m],
-      c: ['center', 'top', W / 2, H / 2],
-    };
-    const [h, v, x, y] = map[where];
-    // Keep the box visually where it is when switching anchors, unless jumping to a preset spot.
+    const mx = W * 0.05, top = H * 0.05, bottom = H * 0.9; // inside title safe, lower third sits a bit above the edge
+    const boxH = (lastLayout && lastLayout.box && lastLayout.box.h) || 120;
+    const col = where.length === 1 ? 'c' : where[1];
+    const rowK = where[0];
+    const h = col === 'l' ? 'left' : col === 'r' ? 'right' : 'center';
+    const x = col === 'l' ? mx : col === 'r' ? W - mx : W / 2;
+    let v = 'bottom', y = bottom;
+    if (rowK === 't') { v = 'top'; y = top; } else if (rowK === 'm' || where === 'c') { v = 'top'; y = H / 2 - boxH / 2; }
     Object.assign(L, { hAnchor: h, vAnchor: v, x: Math.round(x), y: Math.round(y) });
-    if (where === 'bc' || where === 'c') L.align = 'center';
-    else if (where === 'br' || where === 'tr') L.align = 'right';
-    else L.align = 'left';
+    if (L.align !== 'justify') L.align = h;
+    state.ui.pos = where;
     changed({ sync: true });
+  }
+  function setResolution(v) {
+    const [w, h] = v.split('x').map(Number);
+    const fx = w / state.comp.width, fy = h / state.comp.height;
+    state.comp.width = w; state.comp.height = h;
+    // Keep the lower third proportionally placed when resolution changes.
+    state.layout.x = Math.round(state.layout.x * fx); state.layout.y = Math.round(state.layout.y * fy);
+    resizeCanvas(); changed({ sync: true });
   }
 
   function layoutPanel() {
@@ -577,14 +624,7 @@
         row({ label: 'Resolution', type: 'custom', render: (ctl) => {
           const s = el('select');
           fillSelect(s, RESOLUTIONS);
-          s.addEventListener('change', () => {
-            const [w, h] = s.value.split('x').map(Number);
-            const fx = w / state.comp.width, fy = h / state.comp.height;
-            state.comp.width = w; state.comp.height = h;
-            // Keep the lower third proportionally placed when resolution changes.
-            state.layout.x = Math.round(state.layout.x * fx); state.layout.y = Math.round(state.layout.y * fy);
-            resizeCanvas(); changed({ sync: true });
-          });
+          s.addEventListener('change', () => setResolution(s.value));
           ctl.append(s);
           return () => { const k = `${state.comp.width}x${state.comp.height}`; if (!RESOLUTIONS[k]) fillSelect(s, { ...RESOLUTIONS, [k]: k.replace('x', ' × ') }); s.value = k; };
         } }),
@@ -599,10 +639,11 @@
       section('Position', [
         row({ label: 'Quick place', type: 'buttons', buttons: [
           ['↙ Bottom L', () => placeAt('bl'), 'Bottom-left inside title safe'],
-          ['↓ Bottom C', () => placeAt('bc'), 'Bottom-center'],
+          ['↓ Bottom C', () => placeAt('bc'), 'Bottom-centre'],
           ['↘ Bottom R', () => placeAt('br'), 'Bottom-right'],
           ['↖ Top L', () => placeAt('tl'), 'Top-left'],
           ['↗ Top R', () => placeAt('tr'), 'Top-right'],
+          ['◎ Centre', () => placeAt('c'), 'Centre of the frame'],
         ] }),
         row({ label: 'X', type: 'number', path: 'layout.x', key: true, unit: 'px' }),
         row({ label: 'Y', type: 'number', path: 'layout.y', key: true, unit: 'px' }),
@@ -681,11 +722,12 @@
 
   function animPanel(key) {
     const isBd = key === 'backdrop';
-    const opts = isBd ? BACKDROP_ANIMS : TEXT_ANIMS;
-    const base = `${key}.anim`;
-    const name = { backdrop: 'Backdrop', title: 'Title', subtitle: 'Subtitle' }[key];
-    const perUnit = (dir) => (s) => /^(letters|words)/.test(s[key].anim[dir].type);
-    const tp = (k) => `${key}.transform.${k}`;
+    const isText = key === 'title' || key === 'subtitle' || lay(key).kind === 'text';
+    const opts = isText ? TEXT_ANIMS : BACKDROP_ANIMS;
+    const base = `${pp(key)}.anim`;
+    const name = layerName(key);
+    const perUnit = (dir) => (s) => /^(letters|words)/.test(lay(key).anim[dir].type);
+    const tp = (k) => `${pp(key)}.transform.${k}`;
     const transformSec = section(`${name} · Transform`, [
       el('div', { class: 'sub' }, 'Click ◆ to start animating a property, then move the playhead and change the value: a keyframe is added automatically. With a layer selected you can also drag it in the preview.'),
       row({ label: 'Position X', type: 'range', path: tp('x'), key: true, min: -1920, max: 1920, unit: 'px' }),
@@ -694,15 +736,15 @@
       row({ label: 'Rotation', type: 'range', path: tp('rotation'), key: true, min: -360, max: 360, step: 0.5, unit: '°' }),
       row({ label: 'Opacity', type: 'range', path: tp('opacity'), key: true, min: 0, max: 100, unit: '%' }),
       row({ label: 'Blur', type: 'range', path: tp('blur'), key: true, min: 0, max: 60, step: 0.5, unit: 'px' }),
-      isBd ? null : row({ label: 'Tracking', type: 'range', path: tp('tracking'), key: true, min: -20, max: 120, step: 0.5, unit: 'px' }),
+      !isText ? null : row({ label: 'Tracking', type: 'range', path: tp('tracking'), key: true, min: -20, max: 120, step: 0.5, unit: 'px' }),
       row({ label: '', type: 'buttons', buttons: [
-        ['Reset transform', () => { clearKeys(`${key}.transform.`); Object.assign(state[key].transform, { x: 0, y: 0, scale: 100, rotation: 0, opacity: 100, blur: 0, ...(isBd ? {} : { tracking: 0 }) }); changed({ sync: true }); }],
-        ['Remove all keyframes', () => { clearKeys(`${key}.`); changed({ sync: true }); toast(`All ${name} keyframes removed`); }, 'Removes keyframes on every property of this layer (values stay as they are now)'],
+        ['Reset transform', () => { clearKeys(`${pp(key)}.transform.`); Object.assign(lay(key).transform, { x: 0, y: 0, scale: 100, rotation: 0, opacity: 100, blur: 0, ...(!isText ? {} : { tracking: 0 }) }); changed({ sync: true }); }],
+        ['Remove all keyframes', () => { clearKeys(`${pp(key)}.`); changed({ sync: true }); toast(`All ${name} keyframes removed`); }, 'Removes keyframes on every property of this layer (values stay as they are now)'],
       ] }),
     ].filter(Boolean));
     transformSec.classList.add('adv-only');
     const maskSec = maskSection(key, name);
-    const animSec = isBd ? null : animatorsSection(key, name);
+    const animSec = !isText ? null : animatorsSection(key, name);
     return [
       transformSec,
       maskSec,
@@ -710,24 +752,24 @@
       section(`${name} · In`, [
         row({ label: 'Animation', type: 'select', path: `${base}.in.type`, options: opts }),
         row({ label: 'Start at', type: 'range', path: `${base}.in.delay`, min: 0, max: 10, step: 0.05, unit: 's' }),
-        row({ label: 'Duration', type: 'range', path: `${base}.in.duration`, min: 0.05, max: 5, step: 0.05, unit: 's', show: (s) => s[key].anim.in.type !== 'none' }),
+        row({ label: 'Duration', type: 'range', path: `${base}.in.duration`, min: 0.05, max: 5, step: 0.05, unit: 's', show: (s) => lay(key).anim.in.type !== 'none' }),
         easingControl(`${base}.in`),
       ]),
       section(`${name} · Out`, [
         row({ label: 'Animation', type: 'select', path: `${base}.out.type`, options: { ...opts, none: 'None (stay on screen)' } }),
-        row({ label: 'Duration', type: 'range', path: `${base}.out.duration`, min: 0.05, max: 5, step: 0.05, unit: 's', show: (s) => s[key].anim.out.type !== 'none' }),
+        row({ label: 'Duration', type: 'range', path: `${base}.out.duration`, min: 0.05, max: 5, step: 0.05, unit: 's', show: (s) => lay(key).anim.out.type !== 'none' }),
         row({ label: 'Ends before end', type: 'range', path: `${base}.out.offset`, min: 0, max: 5, step: 0.05, unit: 's' }),
         easingControl(`${base}.out`),
       ]),
       section('Motion', [
         row({ label: 'Slide distance', type: 'range', path: `${base}.distance`, min: 0, max: 1200, unit: 'px' }),
-        isBd ? null : row({ label: 'Stagger', type: 'range', path: `${base}.stagger`, min: 0, max: 0.95, step: 0.01, show: (s) => perUnit('in')(s) || perUnit('out')(s) }),
-        isBd ? null : el('div', { class: 'sub' }, 'Stagger controls how much letters/words overlap (0 = all together).'),
+        !isText ? null : row({ label: 'Stagger', type: 'range', path: `${base}.stagger`, min: 0, max: 0.95, step: 0.01, show: (s) => perUnit('in')(s) || perUnit('out')(s) }),
+        !isText ? null : el('div', { class: 'sub' }, 'Stagger controls how much letters/words overlap (0 = all together).'),
         row({ label: 'Copy timing', type: 'buttons', buttons: [
           ['Copy to all layers', () => {
             for (const k of ['backdrop', 'title', 'subtitle']) if (k !== key) {
               for (const d of ['in', 'out']) {
-                const src = state[key].anim[d], dst = state[k].anim[d];
+                const src = lay(key).anim[d], dst = lay(k).anim[d];
                 Object.assign(dst, { duration: src.duration, easing: src.easing, bezier: [...src.bezier] });
               }
             }
@@ -740,21 +782,21 @@
 
   // ---------- Masks (Advanced) ----------
   function maskSection(key, name) {
-    const mp = (k) => `${key}.mask.${k}`;
-    const on = (s) => s[key].mask.enabled;
+    const mp = (k) => `${pp(key)}.mask.${k}`;
+    const on = (s) => lay(key).mask.enabled;
     const fitToLayer = () => {
       const b = lastLayout && lastLayout.layers && lastLayout.layers[key];
       if (!b) return toast('That layer is empty');
       const pad = 8;
       for (const [k, v] of Object.entries({ x: Math.round(b.x - pad), y: Math.round(b.y - pad), w: Math.round(b.w + pad * 2), h: Math.round(b.h + pad * 2) })) setValue(mp(k), v);
-      state[key].mask.enabled = true;
+      lay(key).mask.enabled = true;
       changed({ sync: true });
     };
     const revealPreset = (dir) => () => {
       fitToLayer();
-      const m = state[key].mask;
+      const m = lay(key).mask;
       const t0 = fpsT(time), t1 = fpsT(time + 0.6);
-      clearKeys(`${key}.mask.`);
+      clearKeys(`${pp(key)}.mask.`);
       if (dir === 'right') { state.keys[mp('w')] = [{ t: t0, v: 0, e: 'easeOutCubic' }, { t: t1, v: m.w, e: 'easeOutCubic' }]; }
       else if (dir === 'up') { state.keys[mp('y')] = [{ t: t0, v: m.y + m.h, e: 'easeOutCubic' }, { t: t1, v: m.y, e: 'easeOutCubic' }]; state.keys[mp('h')] = [{ t: t0, v: 0, e: 'easeOutCubic' }, { t: t1, v: m.h, e: 'easeOutCubic' }]; }
       else if (dir === 'iris') { m.shape = 'ellipse'; const cx = m.x + m.w / 2, cy = m.y + m.h / 2, W = m.w * 1.5, H = m.h * 3;
@@ -770,7 +812,7 @@
       row({ label: 'Y', type: 'range', path: mp('y'), key: true, keyLabel: 'Mask Y', min: -500, max: 2500, unit: 'px', show: on }),
       row({ label: 'Width', type: 'range', path: mp('w'), key: true, keyLabel: 'Mask width', min: 0, max: 4000, unit: 'px', show: on }),
       row({ label: 'Height', type: 'range', path: mp('h'), key: true, keyLabel: 'Mask height', min: 0, max: 2500, unit: 'px', show: on }),
-      row({ label: 'Corner radius', type: 'range', path: mp('radius'), key: true, keyLabel: 'Mask radius', min: 0, max: 400, unit: 'px', show: (s) => on(s) && s[key].mask.shape === 'rect' }),
+      row({ label: 'Corner radius', type: 'range', path: mp('radius'), key: true, keyLabel: 'Mask radius', min: 0, max: 400, unit: 'px', show: (s) => on(s) && lay(key).mask.shape === 'rect' }),
       row({ label: 'Feather', type: 'range', path: mp('feather'), key: true, keyLabel: 'Mask feather', min: 0, max: 120, unit: 'px', show: on }),
       row({ label: 'Invert', type: 'checkbox', path: mp('invert'), text: 'Show outside the mask', show: on }),
       row({ label: 'Quick', type: 'buttons', buttons: [
@@ -803,26 +845,26 @@
       start: 0, end: pr.reveal ? 40 : pr.sweep ? 30 : 100, offset: 0, amount: 100,
       props: { x: 0, y: 0, scale: 100, rotation: 0, opacity: 100, blur: 0, tracking: 0, colorOn: false, color: '#f59e0b', ...pr.props },
     };
-    const list = state[key].animators;
+    const list = lay(key).animators;
     list.push(a);
     const i = list.length - 1;
-    const path = `${key}.animators.${i}.offset`;
+    const path = `${pp(key)}.animators.${i}.offset`;
     const t0 = fpsT(time);
     if (pr.reveal) {
       state.keys[path] = [{ t: t0, v: -40, e: pr.ease || 'easeInOutCubic' }, { t: fpsT(time + 1), v: 100, e: 'linear' }];
       a.offset = -40;
-      if (state[key].anim.in.type !== 'none') { state[key].anim.in.type = 'none'; toast(`${LAYER_NAMES[key]} “In” animation set to None so the animator drives the reveal`); }
-      state[key].anim.in.delay = Math.min(state[key].anim.in.delay, t0);
+      if (lay(key).anim.in.type !== 'none') { lay(key).anim.in.type = 'none'; toast(`${layerName(key)} “In” animation set to None so the animator drives the reveal`); }
+      lay(key).anim.in.delay = Math.min(lay(key).anim.in.delay, t0);
     } else if (pr.sweep) {
       state.keys[path] = [{ t: t0, v: -30, e: 'linear' }, { t: fpsT(time + 1.2), v: 100, e: 'linear' }];
       a.offset = -30;
     }
   }
   function removeAnimator(key, i) {
-    const list = state[key].animators;
+    const list = lay(key).animators;
     list.splice(i, 1);
     // Drop this animator's keyframes and renumber the ones after it.
-    const pre = `${key}.animators.`;
+    const pre = `${pp(key)}.animators.`;
     const next = {};
     for (const [p, ks] of Object.entries(state.keys || {})) {
       if (!p.startsWith(pre)) { next[p] = ks; continue; }
@@ -842,11 +884,13 @@
     add.addEventListener('change', () => { if (!add.value) return; makeAnimator(key, add.value); add.value = ''; changed({ sync: true }); });
     let built = -1;
     function build() {
+      if (!lay(key)) return;
       dropControls(owner);
       list.innerHTML = '';
+      const prevOwner = currentOwner;
       currentOwner = owner;
-      state[key].animators.forEach((a, i) => {
-        const ap = (k) => `${key}.animators.${i}.${k}`;
+      lay(key).animators.forEach((a, i) => {
+        const ap = (k) => `${pp(key)}.animators.${i}.${k}`;
         const box = el('div', { class: 'animator' },
           el('div', { class: 'animator-head' },
             el('b', {}, a.name || `Animator ${i + 1}`),
@@ -868,15 +912,15 @@
           row({ label: 'Blur', type: 'range', path: ap('props.blur'), key: true, keyLabel: `Animator ${i + 1} blur`, min: 0, max: 60, unit: 'px' }),
           row({ label: 'Tracking', type: 'range', path: ap('props.tracking'), key: true, keyLabel: `Animator ${i + 1} tracking`, min: -40, max: 120, step: 0.5, unit: 'px' }),
           row({ label: 'Fill colour', type: 'checkbox', path: ap('props.colorOn'), text: 'Change colour' }),
-          row({ label: 'Colour', type: 'color', path: ap('props.color'), key: true, keyLabel: `Animator ${i + 1} colour`, show: (s) => s[key].animators[i] && s[key].animators[i].props.colorOn }),
+          row({ label: 'Colour', type: 'color', path: ap('props.color'), key: true, keyLabel: `Animator ${i + 1} colour`, show: (s) => lay(key).animators[i] && lay(key).animators[i].props.colorOn }),
         );
         list.append(box);
       });
-      currentOwner = null;
-      built = state[key].animators.length;
+      currentOwner = prevOwner;
+      built = lay(key).animators.length;
       refreshVisibility();
     }
-    structureSyncs.push(() => { if (built !== state[key].animators.length) build(); });
+    addStructureSync(() => { if (lay(key) && built !== lay(key).animators.length) build(); });
     const sec = section(`${name} · Text animators`, [
       el('div', { class: 'sub' }, 'Like After Effects: each animator changes letters by a property amount, limited by a range selector. Keyframe Start / End / Offset to sweep the effect across the text. Presets add keyframes at the playhead.'),
       el('div', { class: 'ctl' }, add),
@@ -887,45 +931,566 @@
     return sec;
   }
 
-  // ---------- Tabs ----------
-  const leftTabs = {
-    text: () => [alignSection(), (sectionRefs.title = textSection('title', 'Title (line 1)')), (sectionRefs.subtitle = textSection('subtitle', 'Subtitle (line 2)'))],
-    backdrop: backdropPanel,
-    layout: layoutPanel,
-  };
-  const rightTabs = { 'anim-backdrop': () => animPanel('backdrop'), 'anim-title': () => animPanel('title'), 'anim-subtitle': () => animPanel('subtitle') };
-  function buildTabs(navSel, body, tabs) {
-    const panes = {};
-    for (const [k, fn] of Object.entries(tabs)) { panes[k] = el('div', { 'data-pane': k }, ...fn()); body.append(panes[k]); }
-    const show = (k) => {
-      for (const [n, p] of Object.entries(panes)) p.hidden = n !== k;
-      navSel.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b.dataset.tab === k));
-    };
-    navSel.addEventListener('click', (e) => { const b = e.target.closest('button[data-tab]'); if (b) show(b.dataset.tab); });
-    show(Object.keys(tabs)[0]);
-    return show;
+  // ---------- Advanced inspector (properties of the selected layer) ----------
+  const inspector = $('#inspector');
+  const inspPanes = {};
+  let collapsedSecs = {};
+  try { collapsedSecs = JSON.parse(localStorage.getItem('thirdline:collapsed')) || {}; } catch {}
+  const DEFAULT_COLLAPSED = /Mask|Text animators|Texture|Image backdrop|shadow|Motion$|Outline/;
+  // Click a section title to fold it; remembered per section name.
+  function foldable(sec) {
+    const h = sec.querySelector(':scope > h3'); if (!h) return sec;
+    const name = h.firstChild && h.firstChild.textContent ? h.firstChild.textContent.replace(/^.*·\s*/, '') : h.textContent;
+    const isCol = collapsedSecs[name] ?? DEFAULT_COLLAPSED.test(name);
+    sec.classList.toggle('collapsed', isCol);
+    h.addEventListener('click', (e) => {
+      if (e.target.closest('button,select,input')) return;
+      const c = !sec.classList.contains('collapsed');
+      sec.classList.toggle('collapsed', c); collapsedSecs[name] = c;
+      try { localStorage.setItem('thirdline:collapsed', JSON.stringify(collapsedSecs)); } catch {}
+    });
+    return sec;
+  }
+  function inspHead(key) {
+    if (!key) return el('div', { class: 'insp-head' }, el('b', {}, 'Composition'), el('span', { class: 'sub', style: 'margin:0' }, 'Nothing selected: canvas, position and timing'));
+    if (!isExtra(key)) return el('div', { class: 'insp-head' }, el('span', { class: 'ic', style: `width:12px;height:12px;border-radius:3px;background:${layerColor(key)}` }), el('b', {}, layerName(key)));
+    const name = el('input', { type: 'text', value: lay(key).name || '' });
+    name.addEventListener('input', () => { lay(key).name = name.value; changed(); renderLayerList(); });
+    return el('div', { class: 'insp-head' }, el('span', { class: 'ic', style: `width:12px;height:12px;border-radius:3px;background:${layerColor(key)}` }), name);
+  }
+  function builtinPane(key) {
+    const [transform, mask, animators, inSec, outSec, motion] = (() => { const a = animPanel(key); return key === 'backdrop' ? [a[0], a[1], null, a[2], a[3], a[4]] : a; })();
+    const content = key === 'backdrop' ? backdropPanel() : [(sectionRefs[key] = textSection(key, 'Text')), effectsSection(key)];
+    return [inspHead(key), transform, ...content, mask, animators, inSec, outSec, motion].filter(Boolean).map(foldable);
+  }
+  // Placement of an extra layer: relative to the backdrop box or the whole frame.
+  function placementSection(id) {
+    const p = (k) => `layers.${id}.${k}`;
+    return section('Placement', [
+      row({ label: 'Attach to', type: 'select', path: p('attach'), options: { box: 'The lower third box', frame: 'The whole frame' } }),
+      row({ label: 'Anchor', type: 'custom', render: (ctl) => {
+        const g = el('div', { class: 'grid9' });
+        const cells = [];
+        for (const ay of [0, 0.5, 1]) for (const ax of [0, 0.5, 1]) {
+          const b = el('button', { type: 'button', title: `${['Top', 'Middle', 'Bottom'][ay * 2]} ${['left', 'centre', 'right'][ax * 2]}`, onclick: () => { Object.assign(lay(id), { ax, ay }); changed({ sync: true }); } });
+          cells.push([ax, ay, b]); g.append(b);
+        }
+        ctl.append(g, el('span', { class: 'sub', style: 'margin:0' }, 'Which point of the box it lines up with'));
+        return () => cells.forEach(([ax, ay, b]) => b.classList.toggle('on', lay(id) && lay(id).ax === ax && lay(id).ay === ay));
+      } }),
+      row({ label: 'Offset X', type: 'range', path: p('x'), min: -1920, max: 1920, unit: 'px' }),
+      row({ label: 'Offset Y', type: 'range', path: p('y'), min: -1080, max: 1080, unit: 'px' }),
+    ]);
+  }
+  function extraPane(id) {
+    const ly = lay(id), p = (k) => `layers.${id}.${k}`;
+    let content;
+    if (ly.kind === 'text') content = [textSection(id, 'Text'), effectsSection(id)];
+    else if (ly.kind === 'image') content = [section('Logo / image', [
+      row({ label: 'Image', type: 'custom', render: (ctl) => {
+        const img = el('img', { class: 'thumb', alt: '' });
+        ctl.append(el('div', {}, el('button', { type: 'button', onclick: async () => { const f = await pickFile('image/*'); if (!f) return; lay(id).src = await fileToDataURL(f); lay(id).file = f.name; changed({ sync: true }); } }, 'Replace…'), img));
+        return () => { if (lay(id)) img.src = lay(id).src || ''; };
+      } }),
+      row({ label: 'Width', type: 'range', path: p('w'), key: true, min: 8, max: 1920, unit: 'px' }),
+      row({ label: 'Opacity', type: 'range', path: p('opacity'), key: true, min: 0, max: 100, scale: 100, unit: '%' }),
+    ])];
+    else content = [section('Shape', [
+      row({ label: 'Shape', type: 'select', path: p('shape'), options: Engine.EXTRA_SHAPES }),
+      row({ label: 'Colour', type: 'color', path: p('color'), key: true }),
+      row({ label: 'Width', type: 'range', path: p('w'), key: true, min: 0, max: 1920, unit: 'px' }),
+      row({ label: 'Height', type: 'range', path: p('h'), key: true, min: 0, max: 1080, unit: 'px' }),
+      el('div', { class: 'sub' }, 'Width or height 0 = match the lower third box.'),
+      row({ label: 'Corner radius', type: 'range', path: p('radius'), key: true, min: 0, max: 200, unit: 'px', show: () => lay(id) && lay(id).shape === 'rounded' }),
+      row({ label: 'Opacity', type: 'range', path: p('opacity'), key: true, min: 0, max: 100, scale: 100, unit: '%' }),
+      row({ label: 'Outline', type: 'checkbox', path: p('stroke.on'), text: 'On' }),
+      row({ label: 'Outline width', type: 'range', path: p('stroke.width'), min: 0.5, max: 20, step: 0.5, unit: 'px', show: () => lay(id) && lay(id).stroke.on }),
+      row({ label: 'Outline colour', type: 'color', path: p('stroke.color'), swatches: false, show: () => lay(id) && lay(id).stroke.on }),
+      row({ label: 'Shadow', type: 'checkbox', path: p('shadow.on'), text: 'On' }),
+    ])];
+    const a = animPanel(id);
+    const [transform, mask, ...rest] = a;
+    return [inspHead(id), transform, ...content, placementSection(id), mask, ...rest].filter(Boolean).map(foldable);
+  }
+  let extraPaneFor = null;
+  function showInspector(key) {
+    for (const [k, pane] of Object.entries(inspPanes)) pane.hidden = k !== (key && !isExtra(key) ? key : key ? '__extra' : 'comp');
+    if (key && isExtra(key)) {
+      if (extraPaneFor !== key || !inspPanes.__extra.childElementCount) {
+        if (extraPaneFor) { dropControls(`insp-${extraPaneFor}`); dropControls(`animators-${extraPaneFor}`); }
+        inspPanes.__extra.innerHTML = '';
+        currentOwner = `insp-${key}`;
+        inspPanes.__extra.append(...extraPane(key));
+        currentOwner = null;
+        extraPaneFor = key;
+        syncControls(); refreshVisibility();
+      }
+    }
+    inspector.scrollTop = 0;
+  }
+  function dropExtraPane() {
+    if (extraPaneFor) { dropControls(`insp-${extraPaneFor}`); dropControls(`animators-${extraPaneFor}`); }
+    if (inspPanes.__extra) inspPanes.__extra.innerHTML = '';
+    extraPaneFor = null;
+  }
+  function buildInspector() {
+    inspPanes.comp = el('div', {}, inspHead(null), ...[alignSection(), ...layoutPanel()].map(foldable));
+    for (const k of BUILTIN_IDS) inspPanes[k] = el('div', {}, ...builtinPane(k));
+    inspPanes.__extra = el('div');
+    inspector.append(...Object.values(inspPanes));
+  }
+
+  // ---------- Layers panel & animation library (Advanced) ----------
+  const KIND_ICON = { text: 'T', image: '▣', shape: '■' };
+  let dragLayer = null;
+  let layerSig = '';
+  function renderLayerList() {
+    const sig = JSON.stringify([tracks(), selected, Engine.layerOrder(state).map((k) => lay(k).visible)]);
+    if (sig === layerSig) return;
+    layerSig = sig;
+    const list = $('#layerList'); list.innerHTML = '';
+    for (const [k, name, color] of tracks()) {
+      const ly = lay(k);
+      const hidden = ly.visible === false;
+      const icon = k === 'backdrop' ? '▭' : k === 'title' || k === 'subtitle' ? 'T' : KIND_ICON[ly.kind] || '■';
+      const eye = el('button', { class: 'eye' + (hidden ? ' off' : ''), title: hidden ? 'Show layer' : 'Hide layer', onclick: (e) => { e.stopPropagation(); ly.visible = hidden; changed({ sync: true }); renderLayerList(); } }, '👁');
+      const rowEl = el('div', { class: 'layer-row' + (selected === k ? ' on' : '') + (hidden ? ' hidden-layer' : ''), draggable: 'true', 'data-layer': k, onclick: () => selectLayer(k) },
+        el('span', { class: 'ic', style: `background:${color}` }, icon), el('span', { class: 'nm' }, name), eye,
+        isExtra(k) ? el('button', { class: 'x', title: 'Delete layer', onclick: (e) => { e.stopPropagation(); deleteLayer(k); } }, '✕') : null);
+      rowEl.addEventListener('dragstart', () => { dragLayer = k; });
+      rowEl.addEventListener('dragover', (e) => { e.preventDefault(); rowEl.classList.add('drag-over'); });
+      rowEl.addEventListener('dragleave', () => rowEl.classList.remove('drag-over'));
+      rowEl.addEventListener('drop', (e) => {
+        e.preventDefault(); rowEl.classList.remove('drag-over');
+        if (!dragLayer || dragLayer === k) return;
+        // The list is top-first; put the dragged layer just above this one.
+        const top = tracks().map((t) => t[0]).filter((x) => x !== dragLayer);
+        top.splice(top.indexOf(k), 0, dragLayer);
+        state.order = top.reverse();
+        dragLayer = null; changed({ sync: true }); renderLayerList();
+      });
+      list.append(rowEl);
+    }
+  }
+  const newId = () => 'l' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+  const fileToDataURL = (f) => new Promise((r) => { const rd = new FileReader(); rd.onload = () => r(rd.result); rd.readAsDataURL(f); });
+  async function addLayer(what) {
+    let ly;
+    if (what === 'text') ly = Presets.newLayer('text', { text: 'NEW TEXT', size: 22, weight: 700, color: state.backdrop.accentColor || '#f59e0b', letterSpacing: 2, y: -12, ax: 0, ay: 0, name: 'Text' });
+    else if (what === 'image') {
+      const f = await pickFile('image/*'); if (!f) return;
+      ly = Presets.newLayer('image', { src: await fileToDataURL(f), file: f.name, name: f.name.replace(/\.[^.]+$/, '') });
+    } else if (what === 'line') ly = Presets.newLayer('shape', { shape: 'line', w: 0, h: 4, ax: 0, ay: 1, y: 10, x: 0, name: 'Line', color: state.backdrop.accentColor || '#f59e0b', anim: { in: { type: 'growX' }, out: { type: 'growX' } } });
+    else if (what === 'ellipse') ly = Presets.newLayer('shape', { shape: 'ellipse', w: 26, h: 26, ax: 1, ay: 0.5, x: 44, name: 'Dot', color: '#22c55e', anim: { in: { type: 'pop', easing: 'easeOutBack' }, out: { type: 'scale' } } });
+    else if (what === 'rect') ly = Presets.newLayer('shape', { shape: 'rounded', w: 140, h: 44, radius: 8, ax: 1, ay: 0, x: 16, name: 'Box', color: state.backdrop.accentColor || '#f59e0b', anim: { in: { type: 'wipeRight' }, out: { type: 'wipeLeft' } } });
+    else ly = Presets.newLayer('shape', { color: state.backdrop.accentColor || '#f59e0b' });
+    const id = newId();
+    state.layers = { ...(state.layers || {}), [id]: ly };
+    state.order = [...Engine.layerOrder(state).filter((x) => x !== id), id];
+    changed({ sync: true });
+    selectLayer(id);
+  }
+  function deleteLayer(id) {
+    if (!isExtra(id)) return;
+    if (selected === id) { selected = null; dropExtraPane(); }
+    delete state.layers[id];
+    state.order = (state.order || []).filter((x) => x !== id);
+    for (const p of Object.keys(state.keys || {})) if (p.startsWith(`layers.${id}.`)) delete state.keys[p];
+    selKey = null; selPreset = null;
+    changed({ sync: true }); selectLayer(null);
+  }
+  $('#btnAddLayer').onclick = (e) => { e.stopPropagation(); $('#addMenu').hidden = !$('#addMenu').hidden; };
+  $('#addMenu').addEventListener('click', (e) => { const b = e.target.closest('[data-add]'); if (!b) return; $('#addMenu').hidden = true; addLayer(b.dataset.add); });
+  function renderAnimLib() {
+    const lib = $('#animLib'); lib.innerHTML = '';
+    const all = { ...BACKDROP_ANIMS, ...TEXT_ANIMS };
+    delete all.none;
+    for (const [k, label] of Object.entries(all)) {
+      lib.append(el('button', { type: 'button', title: 'Click: in animation · Shift+click: out animation', onclick: (e) => {
+        if (!selected) return toast('Select a layer first (click it in the preview or the layer list)');
+        const isText = selected === 'title' || selected === 'subtitle' || lay(selected).kind === 'text';
+        if (!(isText ? TEXT_ANIMS : BACKDROP_ANIMS)[k]) return toast(`“${label}” only works on ${isText ? 'shapes' : 'text'} layers`);
+        const dir = e.shiftKey ? 'out' : 'in';
+        lay(selected).anim[dir].type = k;
+        changed({ sync: true });
+        toast(`${layerName(selected)} ${dir}: ${label}`);
+      } }, label.replace(/ \(.*\)$/, '')));
+    }
   }
 
   // ---------- Layer selection ----------
-  let selected = null, showLeft = () => {}, showRight = () => {};
+  let selected = null;
+  const sectionRefs = {};
   function selectLayer(k, { reveal = true } = {}) {
+    if (k && !lay(k)) k = null;
     selected = k;
-    document.querySelectorAll('.layer-chips button').forEach((b) => b.classList.toggle('on', b.dataset.layer === k));
-    if (k && reveal) {
-      showRight(`anim-${k}`);
-      if (k === 'backdrop') showLeft('backdrop');
-      else {
-        showLeft('text');
-        const sec = sectionRefs[k];
-        if (sec) {
-          sec.scrollIntoView({ block: 'start', behavior: 'smooth' });
-          sec.classList.remove('flash'); void sec.offsetWidth; sec.classList.add('flash');
-          if (reveal === 'focus') sec.querySelector('input[type=text]')?.focus();
-        }
-      }
+    document.querySelectorAll('.layer-row').forEach((r) => r.classList.toggle('on', r.dataset.layer === k));
+    showInspector(k);
+    if (reveal === 'focus' && !advanced) {
+      const inp = k === 'title' ? $('#ezTitle') : k === 'subtitle' ? $('#ezSub') : null;
+      if (inp) { inp.focus(); inp.select(); }
     }
     drawPreview(); drawTimeline();
   }
+
+  // ---------- Easy mode ----------
+  const FONT_PAIRS = [
+    ['Montserrat', 'Inter'], ['Poppins', 'Poppins'], ['Inter', 'Inter'], ['Bebas Neue', 'Barlow Condensed'], ['Oswald', 'Roboto Condensed'],
+    ['Anton', 'Lato'], ['Space Grotesk', 'Inter'], ['Playfair Display', 'Lato'], ['DM Serif Display', 'Inter'], ['Barlow Condensed', 'Barlow Condensed'],
+  ];
+  const bestWeight = (fam, want) => { const ws = BUILTIN_FONTS[fam] || [want]; return ws.reduce((a, b) => (Math.abs(b - want) < Math.abs(a - want) ? b : a)); };
+  const SPEED = { slow: 1.5, normal: 1, fast: 0.65 };
+  const SIZE = { S: 0.8, M: 1, L: 1.25 };
+  // Motion recipes: [in, out, delay, inDur, outDur, offset, extra] per layer, at normal speed.
+  const MOTIONS = {
+    wipe: { label: 'Wipe', backdrop: ['wipeRight', 'wipeLeft', 0, 0.7, 0.5, 0, { easing: 'easeInOutQuart' }], title: ['maskUp', 'slideDown', 0.35, 0.6, 0.35, 0.15, { easing: 'easeOutQuart', distance: 60 }], subtitle: ['maskUp', 'fade', 0.5, 0.6, 0.3, 0.2, { easing: 'easeOutQuart' }] },
+    slide: { label: 'Slide', backdrop: ['slideLeft', 'slideLeft', 0, 0.6, 0.45, 0, { easing: 'easeOutCubic', distance: 160 }], title: ['slideLeft', 'fade', 0.2, 0.6, 0.3, 0.1, { easing: 'easeOutCubic', distance: 80 }], subtitle: ['slideLeft', 'fade', 0.32, 0.6, 0.3, 0.1, { easing: 'easeOutCubic', distance: 80 }] },
+    fade: { label: 'Fade', backdrop: ['fade', 'fade', 0, 0.5, 0.4, 0, {}], title: ['fade', 'fade', 0.2, 0.5, 0.35, 0.05, {}], subtitle: ['fade', 'fade', 0.35, 0.5, 0.3, 0.05, {}] },
+    pop: { label: 'Pop', backdrop: ['pop', 'scale', 0, 0.5, 0.35, 0, { easing: 'easeOutBack' }], title: ['fade', 'fade', 0.25, 0.4, 0.25, 0.05, {}], subtitle: ['fade', 'fade', 0.35, 0.4, 0.25, 0.05, {}] },
+    letters: { label: 'Letters', backdrop: ['growX', 'wipeLeft', 0, 0.6, 0.45, 0, { easing: 'easeInOutQuart' }], title: ['lettersRise', 'lettersFade', 0.3, 0.9, 0.4, 0.1, { easing: 'easeOutCubic', stagger: 0.25 }], subtitle: ['lettersFade', 'fade', 0.55, 0.8, 0.3, 0.1, { stagger: 0.15 }] },
+    type: { label: 'Typewriter', backdrop: ['wipeRight', 'wipeLeft', 0, 0.5, 0.4, 0, { easing: 'easeInOutCubic' }], title: ['typewriter', 'fade', 0.3, 0.9, 0.3, 0.1, { easing: 'linear' }], subtitle: ['typewriter', 'fade', 0.9, 0.9, 0.3, 0.1, { easing: 'linear' }] },
+    none: { label: 'None', backdrop: ['none', 'none', 0, 0.5, 0.5, 0, {}], title: ['none', 'none', 0, 0.5, 0.5, 0, {}], subtitle: ['none', 'none', 0, 0.5, 0.5, 0, {}] },
+  };
+  const allLayerIds = () => Engine.layerOrder(state);
+  function scaleTiming(f, { ins = true, outs = true } = {}) {
+    for (const k of allLayerIds()) {
+      const a = lay(k).anim;
+      if (ins) { a.in.delay = +(a.in.delay * f).toFixed(3); a.in.duration = +Math.max(0.05, a.in.duration * f).toFixed(3); }
+      if (outs) { a.out.offset = +(a.out.offset * f).toFixed(3); a.out.duration = +Math.max(0.05, a.out.duration * f).toFixed(3); }
+    }
+  }
+  function applyMotion(m) {
+    const r = MOTIONS[m];
+    for (const k of BUILTIN_IDS) {
+      const [ti, to, delay, inDur, outDur, offset, extra] = r[k];
+      const a = state[k].anim;
+      Object.assign(a.in, { type: ti, delay, duration: inDur, easing: extra.easing || 'easeOutCubic' });
+      Object.assign(a.out, { type: to, duration: outDur, offset, easing: (extra.easing || 'easeOutCubic').replace('Out', 'In').replace('easeInBack', 'easeInCubic') });
+      if (extra.distance) a.distance = extra.distance;
+      if (extra.stagger !== undefined) a.stagger = extra.stagger;
+    }
+    // Extra layers follow along: fade in after the box, out with it.
+    let i = 0;
+    for (const [id, ly] of Object.entries(state.layers || {})) {
+      if (m === 'none') { ly.anim.in.type = 'none'; ly.anim.out.type = 'none'; continue; }
+      if (ly.anim.in.type === 'none') ly.anim.in.type = 'fade';
+      if (ly.anim.out.type === 'none') ly.anim.out.type = 'fade';
+      Object.assign(ly.anim.in, { delay: 0.3 + 0.08 * i++, duration: 0.45 }); Object.assign(ly.anim.out, { duration: 0.3, offset: 0.05 });
+    }
+    const f = SPEED[state.ui.speed] || 1;
+    if (f !== 1) scaleTiming(f);
+    clearKeysForAnims();
+    state.ui.motion = m;
+  }
+  function clearKeysForAnims() { /* preset changes never touch user keyframes */ }
+  function marks() {
+    const D = state.comp.duration;
+    let on = 0, off = D;
+    for (const k of allLayerIds()) {
+      const l = lay(k); if (!l || l.visible === false) continue;
+      if (k === 'backdrop' && l.type === 'none') continue;
+      const sp = Engine.timingSpans(l.anim, D);
+      on = Math.max(on, sp.inEnd); off = Math.min(off, sp.outStart);
+    }
+    return { on: Math.min(on, D), off: Math.max(off, Math.min(on, D)), D };
+  }
+  const holdSeconds = () => { const m = marks(); return Math.max(0, m.off - m.on); };
+  function setHold(h) {
+    h = Math.max(0.5, Math.min(60, h));
+    const delta = h - holdSeconds();
+    state.comp.duration = +Math.max(1, state.comp.duration + delta).toFixed(2);
+    changed({ sync: true });
+    setTime(Math.min(time, state.comp.duration));
+  }
+  function mix(a, b, f) {
+    const A = parseInt(a.slice(1), 16), B = parseInt(b.slice(1), 16);
+    const c = (sh) => Math.round(((A >> sh) & 255) * (1 - f) + ((B >> sh) & 255) * f);
+    return '#' + [16, 8, 0].map((sh) => c(sh).toString(16).padStart(2, '0')).join('');
+  }
+  const POS9 = [['tl', 'Top left'], ['tc', 'Top centre'], ['tr', 'Top right'], ['ml', 'Middle left'], ['c', 'Centre'], ['mr', 'Middle right'], ['bl', 'Bottom left'], ['bc', 'Bottom centre'], ['br', 'Bottom right']];
+
+  function buildEasyPanel() {
+    const root = $('#easyRight');
+    const sync = [];
+    const bind = (fn) => { sync.push(fn); };
+    // Step 2: text fields (title, subtitle, and any extra text layers)
+    const tTitle = el('input', { type: 'text', id: 'ezTitle', class: 'big', placeholder: 'Name' });
+    const tSub = el('input', { type: 'text', id: 'ezSub', class: 'big', placeholder: 'Title / role' });
+    tTitle.addEventListener('input', () => { state.title.text = tTitle.value; changed(); queueGallery(); });
+    tSub.addEventListener('input', () => { state.subtitle.text = tSub.value; changed(); queueGallery(); });
+    const extraFields = el('div');
+    let extraSig = '';
+    bind(() => {
+      if (document.activeElement !== tTitle) tTitle.value = state.title.text;
+      if (document.activeElement !== tSub) tSub.value = state.subtitle.text;
+      const texts = Object.entries(state.layers || {}).filter(([, l]) => l.kind === 'text');
+      const sig = texts.map(([id, l]) => id + l.name).join('|');
+      if (sig !== extraSig) {
+        extraSig = sig; extraFields.innerHTML = '';
+        for (const [id, l] of texts) {
+          const i = el('input', { type: 'text', class: 'big', 'data-id': id });
+          i.addEventListener('input', () => { state.layers[id].text = i.value; changed(); });
+          extraFields.append(el('label', { class: 'l' }, l.name || 'Text'), i);
+        }
+      }
+      extraFields.querySelectorAll('input').forEach((i) => { if (document.activeElement !== i && state.layers[i.dataset.id]) i.value = state.layers[i.dataset.id].text; });
+    });
+    const step2 = el('div', { class: 'step' }, el('h3', {}, el('b', {}, '2'), 'Your text'),
+      el('label', { class: 'l' }, 'Name'), tTitle, el('label', { class: 'l' }, 'Title'), tSub, extraFields);
+
+    // Step 3: look
+    const fontSel = el('select', { style: 'width:100%' });
+    fillSelect(fontSel, [...FONT_PAIRS.map(([a, b], i) => [String(i), a === b ? a : `${a} + ${b}`]), ['custom', 'Custom (set in Advanced)']]);
+    fontSel.addEventListener('change', () => {
+      if (fontSel.value === 'custom') return;
+      const [a, b] = FONT_PAIRS[+fontSel.value];
+      Object.assign(state.title, { font: a, weight: bestWeight(a, 700) });
+      Object.assign(state.subtitle, { font: b, weight: bestWeight(b, a === b ? 400 : 500) });
+      changed({ sync: true }); queueGallery();
+    });
+    bind(() => { const i = FONT_PAIRS.findIndex(([a, b]) => a === state.title.font && b === state.subtitle.font); fontSel.value = i >= 0 ? String(i) : 'custom'; });
+    const colour = (label, get, set) => {
+      const i = el('input', { type: 'color' });
+      i.addEventListener('input', () => { set(i.value); changed(); });
+      i.addEventListener('change', () => { rememberColor(i.value); changed({ sync: true }); queueGallery(); });
+      bind(() => { if (document.activeElement !== i) i.value = (get() || '#000000').slice(0, 7); });
+      return el('label', {}, i, label);
+    };
+    const swatches = el('div', { class: 'swatch3' },
+      colour('Background', () => state.backdrop.fill, (v) => { state.backdrop.fill = v; if (state.backdrop.fillType === 'solid') return; state.backdrop.fill2 = mix(v, '#000000', 0.35); }),
+      colour('Text', () => state.title.color, (v) => { state.title.color = v; state.subtitle.color = mix(v, state.backdrop.fill || '#000000', 0.25); }),
+      colour('Accent', () => state.backdrop.accentColor, (v) => { state.backdrop.accentColor = v; }));
+    const sizeSeg = el('div', { class: 'seg' });
+    for (const k of Object.keys(SIZE)) sizeSeg.append(el('button', { type: 'button', 'data-v': k, onclick: () => {
+      const r = SIZE[k] / (SIZE[state.ui.size] || 1); if (r === 1) return;
+      for (const t of ['title', 'subtitle']) state[t].size = Math.round(state[t].size * r);
+      for (const l of Object.values(state.layers || {})) if (l.kind === 'text') l.size = Math.round(l.size * r); else if (l.kind === 'image') l.w = Math.round(l.w * r);
+      const b = state.backdrop; b.padX = Math.round(b.padX * r); b.padY = Math.round(b.padY * r); b.accentWidth = Math.max(1, Math.round(b.accentWidth * r));
+      state.layout.lineGap = Math.round(state.layout.lineGap * r);
+      state.ui.size = k; changed({ sync: true }); if (state.ui.pos) placeAt(state.ui.pos); queueGallery();
+    } }, k));
+    bind(() => sizeSeg.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === state.ui.size)));
+    const grid = el('div', { class: 'grid9' });
+    for (const [k, title] of POS9) grid.append(el('button', { type: 'button', title, 'data-v': k, onclick: () => { state.ui.pos = k; placeAt(k); } }));
+    bind(() => grid.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === state.ui.pos)));
+    const step3 = el('div', { class: 'step' }, el('h3', {}, el('b', {}, '3'), 'Look'),
+      el('label', { class: 'l' }, 'Font'), fontSel, el('label', { class: 'l' }, 'Colours'), swatches,
+      el('div', { class: 'two' }, el('div', {}, el('label', { class: 'l' }, 'Size'), sizeSeg), el('div', {}, el('label', { class: 'l' }, 'Position'), grid)));
+
+    // Step 4: motion
+    const chips = el('div', { class: 'chips' });
+    chips.append(el('button', { type: 'button', 'data-v': '', title: 'The animation that came with the style', onclick: () => {
+      const i = state.ui.style;
+      if (Number.isInteger(i) && Presets.BUILTIN[i]) {
+        const st = Presets.builtin(i);
+        for (const k of BUILTIN_IDS) state[k].anim = st[k].anim;
+        const f = SPEED[state.ui.speed] || 1; if (f !== 1) scaleTiming(f);
+      }
+      state.ui.motion = ''; changed({ sync: true });
+    } }, 'Style’s own'));
+    for (const [k, r] of Object.entries(MOTIONS)) chips.append(el('button', { type: 'button', 'data-v': k, onclick: () => { applyMotion(k); changed({ sync: true }); playFromStart(); } }, r.label));
+    bind(() => chips.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === (state.ui.motion || ''))));
+    const speedSeg = el('div', { class: 'seg' });
+    for (const [k, label] of [['slow', 'Slow'], ['normal', 'Normal'], ['fast', 'Fast']]) speedSeg.append(el('button', { type: 'button', 'data-v': k, onclick: () => {
+      const r = SPEED[k] / (SPEED[state.ui.speed] || 1); if (r === 1) return;
+      const hold = holdSeconds();
+      scaleTiming(r); state.ui.speed = k;
+      setHold(hold); playFromStart();
+    } }, label));
+    bind(() => speedSeg.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === state.ui.speed)));
+    const holdVal = el('span');
+    const stepper = el('div', { class: 'stepper' },
+      el('button', { type: 'button', title: 'Shorter', onclick: () => setHold(Math.round((holdSeconds() - 0.5) * 2) / 2) }, '−'), holdVal,
+      el('button', { type: 'button', title: 'Longer', onclick: () => setHold(Math.round((holdSeconds() + 0.5) * 2) / 2) }, '+'));
+    bind(() => { holdVal.textContent = `${+holdSeconds().toFixed(1)} s`; });
+    const step4 = el('div', { class: 'step' }, el('h3', {}, el('b', {}, '4'), 'Motion'), chips,
+      el('div', { class: 'two', style: 'margin-top:10px' }, el('div', {}, el('label', { class: 'l' }, 'Speed'), speedSeg), el('div', {}, el('label', { class: 'l' }, 'On screen for'), stepper)));
+
+    // More options: the handful of settings people look for next.
+    currentOwner = 'easy';
+    const more = el('details', { class: 'more' }, el('summary', {}, 'More options', el('span', { class: 'sub', style: 'margin:0' }, 'shape, gradient, effects, video')),
+      el('div', { class: 'more-body' },
+        row({ label: 'Backdrop', type: 'select', path: 'backdrop.type', options: { shape: 'Shape', image: 'Image', none: 'None (text only)' } }),
+        row({ label: 'Shape', type: 'select', path: 'backdrop.shape', options: SHAPES, show: isShape }),
+        row({ label: 'Fill', type: 'select', path: 'backdrop.fillType', options: Engine.GRADIENT_TYPES, show: usesFill }),
+        row({ label: 'Gradient', type: 'custom', show: (s) => usesFill(s) && ft(s) !== 'solid', render: (ctl) => {
+          const sel = el('select');
+          fillSelect(sel, [['', 'Pick a look…'], ...Presets.GRADIENTS.map((g, i) => [String(i), g.name])]);
+          sel.addEventListener('change', () => { if (sel.value === '') return; Object.assign(state.backdrop, Presets.GRADIENTS[+sel.value].patch); sel.value = ''; changed({ sync: true }); queueGallery(); });
+          ctl.append(sel);
+        } }),
+        row({ label: 'Second colour', type: 'color', path: 'backdrop.fill2', show: (s) => usesFill(s) && ft(s) !== 'solid', swatches: false }),
+        row({ label: 'Texture', type: 'custom', show: (s) => s.backdrop.type !== 'none', render: (ctl) => {
+          const sel = el('select');
+          fillSelect(sel, [['', 'None'], ...Object.entries(BUILTIN_TEXTURES).map(([k, v]) => [k, v[0]])]);
+          sel.addEventListener('change', () => {
+            if (!sel.value) Object.assign(state.backdrop.texture, { src: '', name: '', enabled: false });
+            else Object.assign(state.backdrop.texture, { src: builtinTexture(sel.value), name: BUILTIN_TEXTURES[sel.value][0], enabled: true, fit: 'tile', blend: 'overlay', opacity: 0.35 });
+            changed({ sync: true });
+          });
+          ctl.append(sel);
+          return () => { const t = state.backdrop.texture; sel.value = t.enabled && t.src ? (Object.entries(BUILTIN_TEXTURES).find(([, v]) => v[0] === t.name) || [''])[0] : ''; };
+        } }),
+        row({ label: 'Text align', type: 'select', path: 'layout.align', options: { left: 'Left', center: 'Centre', right: 'Right', justify: 'Justified' } }),
+        row({ label: 'UPPERCASE', type: 'checkbox', path: 'title.uppercase', text: 'Name in capitals' }),
+        row({ label: 'Text outline', type: 'checkbox', path: 'title.stroke.on', text: 'Outline the name' }),
+        row({ label: 'Text glow', type: 'checkbox', path: 'title.glow.on', text: 'Glow behind the name' }),
+        row({ label: 'Glow colour', type: 'color', path: 'title.glow.color', swatches: false, show: (s) => s.title.glow.on }),
+        row({ label: 'Text shadow', type: 'checkbox', path: 'title.shadow.on', text: 'Drop shadow', onSet: (v) => { state.subtitle.shadow.on = v; } }),
+        row({ label: 'Box shadow', type: 'checkbox', path: 'backdrop.shadow.on', text: 'Shadow under the box', show: (s) => s.backdrop.type !== 'none' }),
+        row({ label: 'Long names', type: 'checkbox', path: 'title.fitWidth', text: 'Shrink to fit', onSet: (v) => { state.title.fitWidth = v ? 900 : 0; state.subtitle.fitWidth = v ? 900 : 0; changed({ sync: true }); } }),
+        row({ label: 'Motion blur', type: 'checkbox', path: 'comp.motionBlur.enabled', text: 'Smoother movement' }),
+        row({ label: 'Video size', type: 'custom', render: (ctl) => {
+          const sel = el('select');
+          fillSelect(sel, RESOLUTIONS);
+          sel.addEventListener('change', () => setResolution(sel.value));
+          ctl.append(sel);
+          return () => { const k = `${state.comp.width}x${state.comp.height}`; if (!RESOLUTIONS[k]) fillSelect(sel, { ...RESOLUTIONS, [k]: k.replace('x', ' × ') }); sel.value = k; };
+        } }),
+        row({ label: 'Frame rate', type: 'select', path: 'comp.fps', numeric: true, options: { 23.976: '23.976', 24: '24', 25: '25', 29.97: '29.97', 30: '30', 50: '50', 59.94: '59.94', 60: '60' } }),
+        el('div', { class: 'sub' }, 'Everything else (layers, keyframes, masks, letter animators) is in Advanced.'),
+      ));
+    currentOwner = null;
+    root.append(step2, step3, step4, more);
+    addStructureSync(() => sync.forEach((f) => f()));
+    sync.forEach((f) => f());
+  }
+  function playFromStart() { setTime(0); setPlaying(true); }
+
+  // Style gallery: thumbnails of every style rendered with the user's own text.
+  let saved = [];
+  let galleryTimer = null;
+  const queueGallery = () => { clearTimeout(galleryTimer); galleryTimer = setTimeout(refreshGallery, 700); };
+  function styleState(item) {
+    const next = item.builtin !== undefined ? Presets.builtin(item.builtin) : Presets.normalize(clone(item.state));
+    if (item.builtin !== undefined) {
+      next.title.text = state.title.text; next.subtitle.text = state.subtitle.text;
+    }
+    return next;
+  }
+  function thumbFor(st) {
+    const c = document.createElement('canvas'); c.width = st.comp.width; c.height = st.comp.height;
+    const g = c.getContext('2d');
+    const m = (() => { const D = st.comp.duration; let on = 0, off = D; for (const k of Engine.layerOrder(st)) { const sp = Engine.timingSpans(Engine.getLayer(st, k).anim, D); on = Math.max(on, sp.inEnd); off = Math.min(off, sp.outStart); } return (on + Math.max(on, off)) / 2; })();
+    const L = Engine.render(g, st, m, {});
+    const b = L.box, pad = 40;
+    let x0 = b.x - pad, y0 = b.y - pad, w = b.w + pad * 2, h = b.h + pad * 2;
+    for (const e of Object.values(L.layers || {})) { if (!e) continue; const x1 = Math.max(x0 + w, e.x + e.w + pad), y1 = Math.max(y0 + h, e.y + e.h + pad); x0 = Math.min(x0, e.x - pad); y0 = Math.min(y0, e.y - pad); w = x1 - x0; h = y1 - y0; }
+    // Fit to an 8:3 thumbnail
+    const ar = 8 / 3;
+    if (w / h < ar) { const nw = h * ar; x0 -= (nw - w) / 2; w = nw; } else { const nh = w / ar; y0 -= (nh - h) / 2; h = nh; }
+    const t = document.createElement('canvas'); t.width = 320; t.height = 120;
+    const tg = t.getContext('2d'); tg.fillStyle = '#2a3442'; tg.fillRect(0, 0, 320, 120);
+    tg.drawImage(c, x0, y0, w, h, 0, 0, 320, 120);
+    return t.toDataURL('image/jpeg', 0.85);
+  }
+  async function refreshGallery() {
+    if (advanced) return;
+    const g = $('#styleGallery'); if (!g) return;
+    await document.fonts.ready;
+    const items = [...Presets.BUILTIN.map((p, i) => ({ name: p.name.replace(' (default)', ''), builtin: i })), ...saved.map((p) => ({ name: p.name, state: p.state, user: true }))];
+    g.innerHTML = '';
+    for (const it of items) {
+      const st = styleState(it);
+      await ensureFonts(st);
+      const on = it.builtin !== undefined ? state.ui.style === it.builtin : state.ui.style === `u:${it.name}`;
+      const b = el('button', { type: 'button', class: 'st' + (on ? ' on' : ''), title: it.user ? 'Your saved style' : 'Built-in style', onclick: () => applyStyle(it) },
+        el('img', { src: thumbFor(st), alt: '' }),
+        el('span', {}, it.user ? el('a', { class: 'del', title: 'Delete this style', onclick: (e) => { e.stopPropagation(); deleteStyle(it.name); } }, '✕') : null, it.name));
+      g.append(b);
+    }
+    g.append(el('button', { type: 'button', class: 'st add', title: 'Save the current design so you can reuse it', onclick: saveStyle }, '+ Save as my style'));
+  }
+  function applyStyle(it) {
+    let next;
+    if (it.builtin !== undefined) {
+      // Built-in styles change the look only: keep the text, canvas, position and extra layers.
+      next = Presets.builtin(it.builtin);
+      next.title.text = state.title.text; next.subtitle.text = state.subtitle.text;
+      next.comp = clone(state.comp);
+      Object.assign(next.layout, { x: state.layout.x, y: state.layout.y, hAnchor: state.layout.hAnchor, vAnchor: state.layout.vAnchor });
+      if (state.backdrop.image.src && next.backdrop.type !== 'image') next.backdrop.image = clone(state.backdrop.image);
+      next.layers = clone(state.layers || {}); next.order = clone(state.order || next.order);
+      next.ui = { ...clone(state.ui), motion: '', speed: 'normal', size: 'M', style: it.builtin };
+      const hold = holdSeconds();
+      replaceState(next);
+      setHold(hold);
+      if (state.ui.pos && state.ui.pos !== 'bl') placeAt(state.ui.pos);
+    } else {
+      next = clone(it.state);
+      next.ui = { ...(next.ui || {}), style: `u:${it.name}` };
+      replaceState(next);
+    }
+    queueGallery();
+    $('#btnHold').click();
+  }
+  async function saveStyle() {
+    const name = await promptDialog('Save this design as a style', state.ui.style && String(state.ui.style).startsWith('u:') ? state.ui.style.slice(2) : 'My style');
+    if (!name) return;
+    state.ui.style = `u:${name}`;
+    await api.presets.save(name, clone(state));
+    saved = await api.presets.list();
+    refreshGallery();
+    toast(`Saved style “${name}”`);
+  }
+  async function deleteStyle(name) {
+    if (!confirm(`Delete your style “${name}”?`)) return;
+    await api.presets.remove(name);
+    saved = await api.presets.list();
+    refreshGallery();
+  }
+
+  // Phase bar (Easy): In / On screen / Out, with draggable edges.
+  const phaseBar = $('#phaseBar');
+  function drawPhaseBar() {
+    if (advanced || !phaseBar) return;
+    const m = marks(), D = m.D;
+    const [pin, phold, pout] = phaseBar.children;
+    pin.style.width = `${(m.on / D) * 100}%`;
+    pout.style.width = `${((D - m.off) / D) * 100}%`;
+    phold.firstChild.textContent = `On screen · ${(m.off - m.on).toFixed(1)} s`;
+    phaseBar.querySelector('.ph-head').style.left = `${(time / D) * 100}%`;
+  }
+  let phDrag = null;
+  phaseBar.addEventListener('pointerdown', (e) => {
+    const r = phaseBar.getBoundingClientRect(), x = e.clientX - r.left, D = state.comp.duration;
+    const m = marks(), xIn = (m.on / D) * r.width, xOut = (m.off / D) * r.width;
+    phaseBar.setPointerCapture(e.pointerId);
+    const mode = Math.abs(x - xIn) < 10 ? 'in' : Math.abs(x - xOut) < 10 ? 'out' : x > xIn && x < xOut ? 'hold' : 'scrub';
+    phDrag = { mode, x0: x, w: r.width, m, D, hold: m.off - m.on, moved: false, snap: clone(state) };
+    if (mode === 'scrub') { setPlaying(false); setTime((x / r.width) * D); }
+  });
+  phaseBar.addEventListener('pointermove', (e) => {
+    const r = phaseBar.getBoundingClientRect(), x = e.clientX - r.left;
+    if (!phDrag) {
+      const D = state.comp.duration, m = marks();
+      const xIn = (m.on / D) * r.width, xOut = (m.off / D) * r.width;
+      phaseBar.style.cursor = Math.abs(x - xIn) < 10 || Math.abs(x - xOut) < 10 ? 'ew-resize' : x > xIn && x < xOut ? 'grab' : 'pointer';
+      return;
+    }
+    const d = phDrag; const dt = ((x - d.x0) / d.w) * d.D;
+    if (Math.abs(x - d.x0) > 3) d.moved = true;
+    if (!d.moved) return;
+    if (d.mode === 'scrub') return setTime((x / d.w) * d.D);
+    // Restore the snapshot timing, then apply the new length.
+    for (const k of allLayerIds()) { const src = Engine.getLayer(d.snap, k); if (src) lay(k).anim = clone(src.anim); }
+    state.comp.duration = d.snap.comp.duration;
+    if (d.mode === 'in') {
+      const f = Math.max(0.15, (d.m.on + dt) / Math.max(0.05, d.m.on));
+      scaleTiming(f, { outs: false });
+      state.comp.duration = +(d.snap.comp.duration + (marks().on - d.m.on)).toFixed(2);
+    } else if (d.mode === 'out') {
+      const len = d.D - d.m.off;
+      const f = Math.max(0.15, (len - dt) / Math.max(0.05, len));
+      scaleTiming(f, { ins: false });
+      state.comp.duration = +(d.snap.comp.duration + (d.D - marks().off - len)).toFixed(2);
+    } else if (d.mode === 'hold') {
+      state.comp.duration = +Math.max(1, d.snap.comp.duration + dt).toFixed(2);
+    }
+    state.ui.speed = state.ui.speed || 'normal';
+    changed({ sync: true });
+  });
+  phaseBar.addEventListener('pointerup', () => { phDrag = null; });
 
   // ---------- Preview ----------
   const preview = $('#preview'), pctx = preview.getContext('2d');
@@ -955,11 +1520,13 @@
     const f = Math.round(time * fps);
     $('#timecode').textContent = `${time.toFixed(2)}s · f${f} / ${Math.round(state.comp.duration * fps)}`;
     const scrub = $('#scrub'); scrub.max = state.comp.duration; scrub.value = time;
+    drawPhaseBar();
   }
   Engine.onImageLoad = () => { drawPreview(); syncControls(); };
 
   function setTime(t) {
     time = Math.max(0, Math.min(state.comp.duration, t));
+    syncFootage();
     drawPreview(); drawTimeline();
     if (state.keys && Object.keys(state.keys).length) syncKeyable();
     updateKeyBar();
@@ -977,6 +1544,7 @@
   }
   function setPlaying(p) {
     playing = p; $('#btnPlay').textContent = p ? '❚❚' : '▶';
+    const v = $('#bgVideo'); if (!v.hidden && v.src) { if (p) v.play().catch(() => {}); else v.pause(); }
     if (p) { if (time >= state.comp.duration - 1e-3) time = 0; lastTs = 0; requestAnimationFrame(tick); }
   }
 
@@ -1027,33 +1595,30 @@
 
   // ---------- Timeline ----------
   const tl = $('#timeline'), tctx = tl.getContext('2d');
-  const TRACKS = [['backdrop', 'Backdrop', '#3b82f6'], ['title', 'Title', '#f59e0b'], ['subtitle', 'Subtitle', '#22c55e']];
-  const TRACK_COLOR = Object.fromEntries(TRACKS.map(([k, , c]) => [k, c]));
   const TL = { left: 86, right: 16, ruler: 22, rowH: 28, keyH: 18 };
-  const LAYER_ORDER = ['backdrop', 'title', 'subtitle', 'layout', 'comp'];
   const collapsed = {}; // layer → true when its keyframe rows are folded away
   let selPreset = null; // { key, dir: 'in' | 'out' } — a preset in/out animation picked on the timeline
   function keyRows() {
     if (!advanced || !state.keys) return [];
     return Object.keys(state.keys).filter((p) => state.keys[p]?.length)
-      .sort((a, b) => (LAYER_ORDER.indexOf(a.split('.')[0]) - LAYER_ORDER.indexOf(b.split('.')[0])) || a.localeCompare(b));
+      .sort((a, b) => { const o = [...tracks().map((t) => t[0]), 'layout', 'comp']; return (o.indexOf(pathLayer(a)) - o.indexOf(pathLayer(b))) || a.localeCompare(b); });
   }
-  const layerKeyPaths = (layer) => keyRows().filter((p) => p.split('.')[0] === layer);
+  const layerKeyPaths = (layer) => keyRows().filter((p) => pathLayer(p) === layer);
   // Flattened row model: each layer bar, then (Advanced) that layer's keyframe rows right beneath it.
   // Position/canvas keyframes don't belong to a single layer, so they go in their own group at the bottom.
   function timelineRows() {
     const rows = []; let y = TL.ruler + 6;
     const push = (r) => { r.y = y; rows.push(r); y += r.h; };
-    for (const [key, label, color] of TRACKS) {
+    for (const [key, label, color] of tracks()) {
       const paths = layerKeyPaths(key);
       push({ type: 'bar', key, label, color, h: TL.rowH, count: paths.length });
       if (!collapsed[key]) for (const path of paths) push({ type: 'key', path, layer: key, h: TL.keyH });
       if (paths.length && !collapsed[key]) y += 4;
     }
-    const other = keyRows().filter((p) => !TRACK_COLOR[p.split('.')[0]]);
+    const other = keyRows().filter((p) => !layerColor(pathLayer(p)));
     if (other.length) {
       push({ type: 'group', key: 'other', label: 'Position / Canvas', h: TL.keyH + 2, count: other.length });
-      if (!collapsed.other) for (const path of other) push({ type: 'key', path, layer: path.split('.')[0], h: TL.keyH });
+      if (!collapsed.other) for (const path of other) push({ type: 'key', path, layer: pathLayer(path), h: TL.keyH });
     }
     return rows;
   }
@@ -1067,9 +1632,9 @@
     drawTimeline();
   }
   function keyLabel(path) {
-    if (keyLabels[path]) return keyLabels[path];
-    const parts = path.split('.');
-    return `${LAYER_NAMES[parts[0]] || parts[0]} · ${parts.slice(1).filter((x) => x !== 'transform').join(' ')}`;
+    const parts = path.split('.'), L = pathLayer(path);
+    const prop = keyLabels[path] || parts.slice(parts[0] === 'layers' ? 2 : 1).filter((x) => x !== 'transform').join(' ');
+    return `${layerName(L)} · ${prop}`;
   }
   // Label without the layer name, for rows nested under their layer.
   const shortKeyLabel = (path) => keyLabel(path).replace(/^[^·]+·\s*/, '');
@@ -1117,8 +1682,9 @@
           g.fillStyle = '#596176'; g.font = '10px -apple-system, sans-serif';
           g.fillText(`${row.count} ◆`, lx + g.measureText(label).width + 30, y + 15);
         }
-        const a = state[key].anim;
-        const hidden = key === 'backdrop' ? state.backdrop.type === 'none' : !state[key].text;
+        const a = lay(key).anim;
+        const L0 = lay(key);
+        const hidden = L0.visible === false || (key === 'backdrop' ? L0.type === 'none' : (key === 'title' || key === 'subtitle' || L0.kind === 'text') ? !L0.text : false);
         const sp = Engine.timingSpans(a, D);
         const x0 = sx(sp.inStart), x1 = sx(sp.inEnd), x2 = sx(sp.outStart), x3 = sx(sp.outEnd);
         g.globalAlpha = hidden ? 0.25 : 1;
@@ -1157,11 +1723,11 @@
       } else {
         const { path, layer } = row;
         const isSel = selected === layer;
-        const color = TRACK_COLOR[layer] || '#8a93a6';
+        const color = layerColor(layer) || '#8a93a6';
         g.fillStyle = keyIdx++ % 2 ? '#ffffff05' : '#ffffff0a'; g.fillRect(0, y, w, TL.keyH);
         g.fillStyle = color + '90'; g.fillRect(8, y + 2, 2, TL.keyH - 4); // tie the row to its layer
         g.fillStyle = isSel ? '#f59e0b' : '#8a93a6'; g.font = '10px -apple-system, sans-serif';
-        const lbl = TRACK_COLOR[layer] ? shortKeyLabel(path) : keyLabel(path);
+        const lbl = layerColor(layer) ? shortKeyLabel(path) : keyLabel(path);
         g.fillText(fitText(g, lbl, TL.left - 24), 16, y + 12);
         const ks = state.keys[path];
         g.strokeStyle = '#ffffff30'; g.beginPath();
@@ -1193,7 +1759,7 @@
       const ks = state.keys[row.path];
       let best = null, bd = 7;
       for (const k of ks) { const d = Math.abs(sx(k.t) - mx); if (d < bd) { bd = d; best = k; } }
-      if (TRACK_COLOR[row.layer] && selected !== row.layer) selectLayer(row.layer, { reveal: true });
+      if (layerColor(row.layer) && selected !== row.layer) selectLayer(row.layer, { reveal: true });
       if (best) {
         selKey = { path: row.path, k: best }; selPreset = null; setPlaying(false);
         tlDrag = { keyDrag: true, path: row.path, k: best, moved: false };
@@ -1210,7 +1776,7 @@
         release(); return;
       }
       if (selected !== key) selectLayer(key);
-      const a = state[key].anim;
+      const a = lay(key).anim;
       const sp = Engine.timingSpans(a, state.comp.duration);
       const mode = barHit(mx, sx(sp.inStart), sx(sp.inEnd), sx(sp.outStart), sx(sp.outEnd), a);
       if (mode) {
@@ -1239,7 +1805,7 @@
       setTime(tlDrag.k.t);
       return;
     }
-    const a = state[tlDrag.key].anim; const dt = t - tlDrag.t0; const D = state.comp.duration;
+    const a = lay(tlDrag.key).anim; const dt = t - tlDrag.t0; const D = state.comp.duration;
     const r2 = (v) => Math.round(Math.max(0, v) * 100) / 100;
     if (tlDrag.mode === 'in' || tlDrag.mode === 'both') a.in.delay = r2(Math.min(tlDrag.delay + dt, D - 0.1));
     if (tlDrag.mode === 'out' || tlDrag.mode === 'both') a.out.offset = r2(Math.min(tlDrag.offset - dt, D - 0.1));
@@ -1269,7 +1835,7 @@
     const row = rowAt(timelineRows(), my);
     let cur = 'pointer', tip = '';
     if (row && row.type === 'bar' && mx >= TL.left) {
-      const a = state[row.key].anim;
+      const a = lay(row.key).anim;
       const sp = Engine.timingSpans(a, state.comp.duration);
       const m = barHit(mx, sx(sp.inStart), sx(sp.inEnd), sx(sp.outStart), sx(sp.outEnd), a);
       cur = { in: 'col-resize', out: 'col-resize', inDur: 'ew-resize', outDur: 'ew-resize', both: 'grab' }[m] || 'pointer';
@@ -1282,7 +1848,7 @@
 
   // ---------- Preset animations as keyframes ----------
   const animLabel = (key, dir) => {
-    const t = state[key].anim[dir].type;
+    const t = lay(key).anim[dir].type;
     return (key === 'backdrop' ? Engine.BACKDROP_ANIMS : Engine.TEXT_ANIMS)[t] || t;
   };
   // How each preset type maps onto the layer transform. fade = fraction of the transition over which opacity ramps.
@@ -1300,13 +1866,13 @@
     return 1;
   }
   function convertPreset(key, dir) {
-    const a = state[key].anim, A = a[dir];
+    const a = lay(key).anim, A = a[dir];
     const map = CONVERTIBLE[A.type];
     if (!map) { toast(`“${animLabel(key, dir)}” can’t be turned into keyframes. You can still retime or delete it.`); return false; }
     const sp = Engine.timingSpans(a, state.comp.duration);
     const [t0, t1] = dir === 'in' ? [sp.inStart, sp.inEnd] : [sp.outStart, sp.outEnd];
     const ease = getEasing(A.easing, A.bezier);
-    const tr = (p) => `${key}.transform.${p}`;
+    const tr = (p) => `${pp(key)}.transform.${p}`;
     const base = (p, t) => (isKeyed(tr(p)) ? Engine.valueAtKeys(keysOf(tr(p)), t) : getPath(state, tr(p)) ?? (p === 'scale' || p === 'opacity' || p === 'scaleX' ? 100 : 0));
     // Each property animates between "hidden" (h) and "shown" (s); the in goes h→s, the out goes s→h.
     // Keys go at ta and tb; the "hidden" end is t0 for the in and t1 for the out.
@@ -1329,28 +1895,28 @@
     A.type = 'none';
     selPreset = null; collapsed[key] = false;
     changed({ sync: true });
-    toast(`${LAYER_NAMES[key]} ${dir === 'in' ? 'in' : 'out'} animation is now regular keyframes`);
+    toast(`${layerName(key)} ${dir === 'in' ? 'in' : 'out'} animation is now regular keyframes`);
     return true;
   }
   function deletePreset(key, dir) {
     const label = animLabel(key, dir);
-    state[key].anim[dir].type = 'none';
+    lay(key).anim[dir].type = 'none';
     selPreset = null;
     changed({ sync: true });
-    toast(`${LAYER_NAMES[key]} ${dir} animation removed (${label}). It now ${dir === 'in' ? 'cuts in' : 'cuts out'}. Undo brings it back.`);
+    toast(`${layerName(key)} ${dir} animation removed (${label}). It now ${dir === 'in' ? 'cuts in' : 'cuts out'}. Undo brings it back.`);
   }
 
   // ---------- Keyframe inspector bar ----------
   const keyBar = $('#keyBar');
   function updateKeyBar() {
-    if (selPreset && (!advanced || state[selPreset.key].anim[selPreset.dir].type === 'none')) selPreset = null;
+    if (selPreset && (!advanced || lay(selPreset.key).anim[selPreset.dir].type === 'none')) selPreset = null;
     const keyOk = selKey && isKeyed(selKey.path) && keysOf(selKey.path).includes(selKey.k);
     if (!keyOk) selKey = null;
     $('#kbKeyCtl').hidden = !keyOk; $('#kbPreCtl').hidden = !selPreset;
     keyBar.hidden = !keyOk && !selPreset;
     if (selPreset) {
-      const { key, dir } = selPreset, A = state[key].anim[dir];
-      $('#kbLabel').textContent = `◆ ${LAYER_NAMES[key]} · ${dir === 'in' ? 'In' : 'Out'} animation`;
+      const { key, dir } = selPreset, A = lay(key).anim[dir];
+      $('#kbLabel').textContent = `◆ ${layerName(key)} · ${dir === 'in' ? 'In' : 'Out'} animation`;
       const sel = $('#kpType');
       if (sel.dataset.for !== key) fillSelect(sel, Object.entries(key === 'backdrop' ? Engine.BACKDROP_ANIMS : Engine.TEXT_ANIMS).filter(([k]) => k !== 'none'));
       sel.dataset.for = key; sel.value = A.type;
@@ -1394,20 +1960,20 @@
     if (selPreset) return deletePreset(selPreset.key, selPreset.dir);
     if (selKey) { removeKey(selKey.path, selKey.k); changed({ sync: true }); updateKeyBar(); }
   };
-  $('#kpType').addEventListener('change', (e) => { if (selPreset) { state[selPreset.key].anim[selPreset.dir].type = e.target.value; changed({ sync: true }); } });
+  $('#kpType').addEventListener('change', (e) => { if (selPreset) { lay(selPreset.key).anim[selPreset.dir].type = e.target.value; changed({ sync: true }); } });
   $('#kpDur').addEventListener('input', (e) => {
     if (!selPreset || !(+e.target.value > 0)) return;
-    state[selPreset.key].anim[selPreset.dir].duration = Math.max(0.05, Math.min(state.comp.duration, +e.target.value));
+    lay(selPreset.key).anim[selPreset.dir].duration = Math.max(0.05, Math.min(state.comp.duration, +e.target.value));
     changed({ sync: true });
   });
-  $('#kpEase').addEventListener('change', (e) => { if (selPreset && e.target.value === 'custom') return openGraph({ kind: 'preset', ...selPreset }); if (selPreset) { state[selPreset.key].anim[selPreset.dir].easing = e.target.value; changed({ sync: true }); } });
+  $('#kpEase').addEventListener('change', (e) => { if (selPreset && e.target.value === 'custom') return openGraph({ kind: 'preset', ...selPreset }); if (selPreset) { lay(selPreset.key).anim[selPreset.dir].easing = e.target.value; changed({ sync: true }); } });
   $('#kpConvert').onclick = () => { if (selPreset) convertPreset(selPreset.key, selPreset.dir); };
   $('#kbPrev').onclick = () => jumpKey(-1);
   $('#kbNext').onclick = () => jumpKey(1);
   function jumpKey(dir) {
     const times = keyRows().flatMap((p) => state.keys[p].map((k) => k.t));
-    if (advanced) for (const [key] of TRACKS) {
-      const a = state[key].anim, sp = Engine.timingSpans(a, state.comp.duration);
+    if (advanced) for (const [key] of tracks()) {
+      const a = lay(key).anim, sp = Engine.timingSpans(a, state.comp.duration);
       if (a.in.type !== 'none') times.push(sp.inStart, sp.inEnd);
       if (a.out.type !== 'none') times.push(sp.outStart, sp.outEnd);
     }
@@ -1430,12 +1996,12 @@
   // For the last keyframe of a property there is no outgoing segment, so the incoming one is used.
   function easeTarget(hit) {
     if (hit.kind === 'preset') {
-      const A = state[hit.key].anim[hit.dir];
-      const sp = Engine.timingSpans(state[hit.key].anim, state.comp.duration);
+      const A = lay(hit.key).anim[hit.dir];
+      const sp = Engine.timingSpans(lay(hit.key).anim, state.comp.duration);
       const [t0, t1] = hit.dir === 'in' ? [sp.inStart, sp.inEnd] : [sp.outStart, sp.outEnd];
       return {
         ...hit, t0, t1, va: hit.dir === 'in' ? 0 : 100, vb: hit.dir === 'in' ? 100 : 0, unit: '% shown',
-        title: `${LAYER_NAMES[hit.key]} · ${hit.dir === 'in' ? 'In' : 'Out'} (${animLabel(hit.key, hit.dir)})`,
+        title: `${layerName(hit.key)} · ${hit.dir === 'in' ? 'In' : 'Out'} (${animLabel(hit.key, hit.dir)})`,
         get e() { return A.easing; }, get bez() { return A.bezier; },
         set(e, bez) { A.easing = e; if (bez) A.bezier = bez; },
       };
@@ -1460,7 +2026,7 @@
       return best ? { kind: 'key', path: row.path, k: best } : null;
     }
     if (row.type === 'bar') {
-      const a = state[row.key].anim, sp = Engine.timingSpans(a, state.comp.duration);
+      const a = lay(row.key).anim, sp = Engine.timingSpans(a, state.comp.duration);
       const m = barHit(mx, sx(sp.inStart), sx(sp.inEnd), sx(sp.outStart), sx(sp.outEnd), a);
       const dir = m === 'in' || m === 'inDur' ? 'in' : m === 'out' || m === 'outDur' ? 'out' : null;
       return dir && a[dir].type !== 'none' ? { kind: 'preset', key: row.key, dir } : null;
@@ -1470,8 +2036,8 @@
   function selectHit(hit) {
     if (hit.kind === 'key') { selKey = { path: hit.path, k: hit.k }; selPreset = null; }
     else { selPreset = { key: hit.key, dir: hit.dir }; selKey = null; }
-    const layer = hit.kind === 'key' ? hit.path.split('.')[0] : hit.key;
-    if (TRACK_COLOR[layer] && selected !== layer) selectLayer(layer);
+    const layer = hit.kind === 'key' ? pathLayer(hit.path) : hit.key;
+    if (layerColor(layer) && selected !== layer) selectLayer(layer);
     updateKeyBar(); drawTimeline();
   }
 
@@ -1496,7 +2062,7 @@
     if (T.e === 'custom') item('Custom curve', () => openGraph(hit), { on: true });
     sep();
     item('Edit curve in graph editor…', () => openGraph(hit));
-    if (hit.kind === 'preset') item('Convert to keyframes', () => convertPreset(hit.key, hit.dir), { disabled: !CONVERTIBLE[state[hit.key].anim[hit.dir].type] });
+    if (hit.kind === 'preset') item('Convert to keyframes', () => convertPreset(hit.key, hit.dir), { disabled: !CONVERTIBLE[lay(hit.key).anim[hit.dir].type] });
     item(hit.kind === 'key' ? 'Delete keyframe' : 'Remove animation', () => {
       if (hit.kind === 'key') { removeKey(hit.path, hit.k); changed({ sync: true }); updateKeyBar(); } else deletePreset(hit.key, hit.dir);
     });
@@ -1658,73 +2224,55 @@
   $('#btnNextFrame').onclick = () => { setPlaying(false); setTime(Math.round(time * state.comp.fps + 1) / state.comp.fps); };
   $('#btnHold').onclick = () => {
     setPlaying(false);
-    const ends = ['backdrop', 'title', 'subtitle'].map((k) => Engine.timingSpans(state[k].anim, state.comp.duration));
-    const on = Math.max(...ends.map((s) => s.inEnd)), off = Math.min(...ends.map((s) => s.outStart));
+    const { on, off } = marks();
     setTime(on <= off ? (on + off) / 2 : on);
   };
   $('#scrub').addEventListener('input', (e) => { setPlaying(false); setTime(+e.target.value); });
 
-  // Preview background / guides
-  const bgEl = $('#frameBg');
+  // Preview background: colours, or the user's own footage / photo (video follows the playhead).
+  const bgEl = $('#frameBg'), bgVideo = $('#bgVideo');
+  function syncFootage() {
+    if (bgVideo.hidden || !bgVideo.duration || playing) return;
+    const t = time % bgVideo.duration;
+    if (Math.abs(bgVideo.currentTime - t) > 0.02) bgVideo.currentTime = t;
+  }
+  function useFootage(f) {
+    if (!f) return;
+    const url = URL.createObjectURL(f);
+    if (f.type.startsWith('video/')) {
+      bgEl.className = 'frame-bg dark'; bgEl.style.backgroundImage = '';
+      bgVideo.src = url; bgVideo.hidden = false; bgVideo.onloadeddata = syncFootage;
+    } else {
+      bgVideo.hidden = true; bgVideo.removeAttribute('src');
+      bgEl.className = 'frame-bg'; bgEl.style.backgroundImage = `url(${url})`;
+    }
+    $('#bgMode').value = 'footage';
+    toast(`Previewing over ${f.name} (it is not exported)`);
+  }
   $('#bgMode').addEventListener('change', (e) => {
     const m = e.target.value;
-    if (m === 'image') { $('#bgFile').click(); return; }
+    if (m === 'footage') { $('#bgFile').click(); return; }
+    bgVideo.hidden = true; bgVideo.pause();
     $('#bgColor').hidden = m !== 'custom';
     if (m === 'custom') { bgEl.className = 'frame-bg'; bgEl.style.backgroundImage = ''; bgEl.style.background = $('#bgColor').value; return; }
     bgEl.style.background = '';
     bgEl.className = 'frame-bg ' + m; bgEl.style.backgroundImage = '';
   });
-  $('#bgFile').addEventListener('change', (e) => {
-    const f = e.target.files[0]; if (!f) return;
-    bgEl.className = 'frame-bg'; bgEl.style.backgroundImage = `url(${URL.createObjectURL(f)})`;
-  });
+  $('#bgColor').addEventListener('input', (e) => { bgEl.style.background = e.target.value; });
+  $('#bgFile').addEventListener('change', (e) => { useFootage(e.target.files[0]); e.target.value = ''; });
   bgEl.className = 'frame-bg checker';
+  // Drag a video or photo onto the preview.
+  const vp = $('#viewport');
+  vp.addEventListener('dragover', (e) => { if ([...e.dataTransfer.items].some((i) => i.kind === 'file')) { e.preventDefault(); $('#dropHint').hidden = false; } });
+  vp.addEventListener('dragleave', (e) => { if (!vp.contains(e.relatedTarget)) $('#dropHint').hidden = true; });
+  vp.addEventListener('drop', (e) => {
+    e.preventDefault(); $('#dropHint').hidden = true;
+    const f = [...e.dataTransfer.files].find((x) => /^(video|image)\//.test(x.type));
+    if (f) useFootage(f);
+  });
   $('#optSafe').addEventListener('change', (e) => { view.safeAreas = e.target.checked; drawPreview(); });
   $('#optBounds').addEventListener('change', (e) => { view.bounds = e.target.checked; drawPreview(); });
 
-  // ---------- Presets ----------
-  let saved = [];
-  async function refreshPresets(selectValue) {
-    saved = await api.presets.list();
-    const sel = $('#presetSelect');
-    fillSelect(sel, [
-      ['', '— Choose a style or preset —'],
-      { group: 'Built-in styles', items: Presets.BUILTIN.map((p, i) => [`b:${i}`, p.name]) },
-      ...(saved.length ? [{ group: 'My presets', items: saved.map((p) => [`u:${p.name}`, p.name]) }] : []),
-    ]);
-    sel.value = selectValue || '';
-  }
-  $('#presetSelect').addEventListener('change', (e) => {
-    const v = e.target.value; if (!v) return;
-    if (v.startsWith('b:')) {
-      // Built-in styles change the look only: keep the user's text, canvas and position.
-      const next = Presets.builtin(+v.slice(2));
-      next.title.text = state.title.text; next.subtitle.text = state.subtitle.text;
-      next.comp = clone(state.comp);
-      Object.assign(next.layout, { x: state.layout.x, y: state.layout.y, hAnchor: state.layout.hAnchor, vAnchor: state.layout.vAnchor });
-      if (state.backdrop.image.src && next.backdrop.type !== 'image') next.backdrop.image = clone(state.backdrop.image);
-      replaceState(next);
-    } else {
-      const p = saved.find((s) => s.name === v.slice(2));
-      if (p) replaceState(p.state);
-    }
-    $('#btnHold').click();
-  });
-  $('#btnSavePreset').onclick = async () => {
-    const cur = $('#presetSelect').value;
-    const name = await promptDialog('Save preset as', cur.startsWith('u:') ? cur.slice(2) : state.title.text || 'My lower third');
-    if (!name) return;
-    await api.presets.save(name, clone(state));
-    await refreshPresets(`u:${name}`);
-    toast(`Saved preset “${name}”`);
-  };
-  $('#btnDeletePreset').onclick = async () => {
-    const v = $('#presetSelect').value;
-    if (!v.startsWith('u:')) return toast('Select one of your saved presets to delete');
-    if (!confirm(`Delete preset “${v.slice(2)}”?`)) return;
-    await api.presets.remove(v.slice(2));
-    await refreshPresets();
-  };
   // ---------- Project files (.l3rd) ----------
   let projectPath = null, dirty = false;
   const baseName = (p) => (p ? p.split(/[\\/]/).pop().replace(/\.(l3rd|json)$/i, '') : 'Untitled');
@@ -1794,11 +2342,25 @@
   api.project.onOpenPath(async (p) => { if (!confirmDiscard()) return; const r = await api.project.read(p); if (r) loadProjectText(r.text, r.path); });
   api.onMenu((cmd) => ({
     new: newProject, open: openProject, save: () => saveProject(false), saveAs: () => saveProject(true),
-    export: () => $('#btnExport').click(), undo, redo,
+    export: () => $('#btnExport').click(), undo, redo, batch: openBatch, live: openLive, updates: () => checkUpdates(true),
   })[cmd]?.());
   $('#btnNew').onclick = newProject;
   $('#btnOpen').onclick = openProject;
   $('#btnSave').onclick = (e) => saveProject(e.shiftKey || e.altKey);
+  $('#btnSaveAs').onclick = () => saveProject(true);
+  $('#btnSavePreset').onclick = () => saveStyle();
+  $('#btnBatch').onclick = () => openBatch();
+  $('#btnLiveMenu').onclick = () => openLive();
+  $('#btnUpdates').onclick = () => checkUpdates(true);
+  $('#btnFile').onclick = (e) => { e.stopPropagation(); $('#fileMenu').hidden = !$('#fileMenu').hidden; };
+  $('#fileMenu').addEventListener('click', (e) => { if (e.target.closest('button')) $('#fileMenu').hidden = true; });
+  document.addEventListener('pointerdown', (e) => {
+    for (const [m, b] of [['#fileMenu', '#btnFile'], ['#addMenu', '#btnAddLayer']]) if (!$(m).hidden && !e.target.closest(m) && !e.target.closest(b)) $(m).hidden = true;
+  });
+  $('#modeEasy').onclick = () => setAdvanced(false);
+  $('#modeAdv').onclick = () => setAdvanced(true);
+  $('#optMB').addEventListener('change', (e) => { state.comp.motionBlur.enabled = e.target.checked; state.comp.motionBlur.preview = e.target.checked; changed({ sync: true }); });
+  addStructureSync(() => { $('#optMB').checked = !!state.comp.motionBlur.enabled; });
 
   function promptDialog(title, value) {
     return new Promise((resolve) => {
@@ -1834,7 +2396,8 @@
     $('#exportName').value = (state.title.text || 'lower-third').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-').toLowerCase() || 'lower-third';
     $('#exportError').hidden = true; $('#exportProgress').hidden = true; $('#btnReveal').hidden = true;
     $('#btnExportGo').disabled = false;
-    exportSummary(); setPlaying(false); dlg.showModal();
+    $('#exportFps').value = String(state.comp.fps);
+    applyExportFor(); setPlaying(false); dlg.showModal();
   };
   dlg.addEventListener('change', exportSummary);
   $('#btnExportCancel').onclick = async () => {
@@ -1847,52 +2410,188 @@
     $('#exportError').hidden = false; $('#exportError').textContent = String(err.message || err);
   });
 
+  // Renders every frame of a design and streams it to ffmpeg. Used by Export and Batch export.
+  async function renderToFile(snap, format, out, onProgress, { bg = '#000000', isCancelled = () => false } = {}) {
+    const { width, height, fps, duration } = snap.comp;
+    const frames = Math.max(1, Math.round(duration * fps));
+    await ensureFonts(snap); await document.fonts.ready; await Engine.imagesReady(snap);
+    const cv = document.createElement('canvas'); cv.width = width; cv.height = height;
+    const ctx = cv.getContext('2d', { willReadFrequently: true });
+    const job = await api.exporter.start({ format, out, width, height, fps });
+    exportJob = job;
+    try {
+      for (let i = 0; i < frames; i++) {
+        if (isCancelled()) throw new Error('cancelled');
+        Engine.renderFrame(ctx, snap, i / fps, { precise: true });
+        if (format === 'mp4') { ctx.save(); ctx.globalCompositeOperation = 'destination-over'; ctx.fillStyle = bg; ctx.fillRect(0, 0, width, height); ctx.restore(); }
+        const img = ctx.getImageData(0, 0, width, height);
+        await api.exporter.frame(job, new Uint8Array(img.data.buffer));
+        onProgress(i + 1, frames);
+        if (i % 4 === 0) await new Promise((r) => setTimeout(r, 0));
+      }
+      return await api.exporter.finish(job);
+    } catch (err) {
+      await api.exporter.cancel(job).catch(() => {});
+      throw err;
+    } finally { exportJob = null; }
+  }
   async function runExport() {
     const format = fmt();
     const out = await api.exporter.chooseDest(format, $('#exportName').value || 'lower-third');
     if (!out) return;
     const snap = clone(state);
-    const { width, height, fps, duration } = snap.comp;
-    const frames = Math.max(1, Math.round(duration * fps));
-    await ensureFonts(snap); await document.fonts.ready; await Engine.imagesReady(snap);
-
-    const cv = document.createElement('canvas'); cv.width = width; cv.height = height;
-    const ctx = cv.getContext('2d', { willReadFrequently: true });
-    const bg = $('#exportBg').value;
     const bar = $('#exportProgress .bar'), label = $('#exportProgress span');
     $('#exportProgress').hidden = false; $('#exportError').hidden = true; $('#btnReveal').hidden = true;
     $('#btnExportGo').disabled = true; $('#btnExportCancel').textContent = 'Cancel';
     exportCancelled = false;
     const started = performance.now();
-    exportJob = await api.exporter.start({ format, out, width, height, fps });
     try {
-      for (let i = 0; i < frames; i++) {
-        if (exportCancelled) throw new Error('cancelled');
-        Engine.renderFrame(ctx, snap, i / fps, { precise: true });
-        if (format === 'mp4') {
-          ctx.save(); ctx.globalCompositeOperation = 'destination-over'; ctx.fillStyle = bg; ctx.fillRect(0, 0, width, height); ctx.restore();
-        }
-        const img = ctx.getImageData(0, 0, width, height);
-        await api.exporter.frame(exportJob, new Uint8Array(img.data.buffer));
-        const pct = ((i + 1) / frames) * 100;
-        bar.style.width = `${pct}%`;
+      const res = await renderToFile(snap, format, out, (n, total) => {
+        const pct = (n / total) * 100; bar.style.width = `${pct}%`;
         const el2 = (performance.now() - started) / 1000;
-        label.textContent = `Frame ${i + 1} / ${frames} · ${Math.round(pct)}% · ${el2 > 1 ? Math.round((el2 / (i + 1)) * (frames - i - 1)) + 's left' : ''}`;
-        if (i % 4 === 0) await new Promise((r) => setTimeout(r, 0));
-      }
-      label.textContent = 'Finalizing…';
-      const res = await api.exporter.finish(exportJob);
+        label.textContent = n === total ? 'Finalizing…' : `Frame ${n} / ${total} · ${Math.round(pct)}% · ${el2 > 1 ? Math.round((el2 / n) * (total - n)) + 's left' : ''}`;
+      }, { bg: $('#exportBg').value, isCancelled: () => exportCancelled });
       lastOut = res.out;
       label.textContent = `Done in ${((performance.now() - started) / 1000).toFixed(1)}s`;
       $('#btnReveal').hidden = false;
       toast('Export finished');
     } catch (err) {
-      await api.exporter.cancel(exportJob).catch(() => {});
       if (err.message === 'cancelled') { label.textContent = 'Cancelled'; bar.style.width = '0'; }
       else throw err;
     } finally {
-      exportJob = null; $('#btnExportGo').disabled = false; $('#btnExportCancel').textContent = 'Close';
+      $('#btnExportGo').disabled = false; $('#btnExportCancel').textContent = 'Close';
     }
+  }
+  // "Made for": picks the right format and explains how to bring it into that app.
+  const EXPORT_FOR = {
+    premiere: ['prores', 'ProRes 4444 keeps the transparency. Drag the .mov onto a video track above your footage.'],
+    resolve: ['prores', 'ProRes 4444 keeps the transparency. Import it to the Media Pool and put it on a track above your footage (V2).'],
+    fcp: ['prores', 'ProRes 4444 keeps the transparency. Import, then connect the clip above your footage in the timeline.'],
+    ae: ['prores', 'ProRes 4444 with straight alpha. Import and drop it above your footage layer.'],
+    obs: ['webm', 'WebM keeps the transparency and works as a Media Source in OBS and vMix. For live control, use File → Live output instead.'],
+    social: ['mp4', 'MP4 has no transparency, so it’s rendered over the colour below (use a green screen colour to key it later).'],
+    custom: [null, ''],
+  };
+  function applyExportFor() {
+    const [f, tip] = EXPORT_FOR[$('#exportFor').value] || [null, ''];
+    if (f) dlg.querySelector(`input[name=fmt][value=${f}]`).checked = true;
+    $('#exportTip').textContent = tip;
+    try { localStorage.setItem('thirdline:exportFor', $('#exportFor').value); } catch {}
+    exportSummary();
+  }
+  $('#exportFor').addEventListener('change', applyExportFor);
+  try { const v = localStorage.getItem('thirdline:exportFor'); if (v && EXPORT_FOR[v]) $('#exportFor').value = v; } catch {}
+  $('#exportFps').addEventListener('change', (e) => { state.comp.fps = +e.target.value; changed({ sync: true }); exportSummary(); });
+  dlg.querySelectorAll('input[name=fmt]').forEach((r) => r.addEventListener('change', () => { $('#exportFor').value = 'custom'; $('#exportTip').textContent = ''; }));
+
+  // ---------- Batch export (CSV) ----------
+  const bDlg = $('#batchDialog');
+  let batch = null, batchCancelled = false, batchDir = null;
+  function openBatch() {
+    if (!api.exporter || !api.exporter.chooseFolder) return toast('Batch export needs the desktop app.');
+    $('#batchError').hidden = true; $('#batchProgress').hidden = true; $('#batchReveal').hidden = true;
+    renderBatch(); bDlg.showModal();
+  }
+  function renderBatch() {
+    const map = $('#batchMap'), list = $('#batchList');
+    map.innerHTML = ''; list.innerHTML = '';
+    $('#batchGo').disabled = !batch || !batch.rows.length;
+    if (!batch) { $('#batchFile').textContent = 'No file chosen'; list.hidden = true; return; }
+    $('#batchFile').textContent = `${batch.name} · ${batch.rows.length} rows`;
+    for (const f of batch.fields) {
+      const sel = el('select');
+      fillSelect(sel, [['', '(leave as is)'], ...batch.headers.map((h) => [h, h])]);
+      sel.value = batch.map[f.id] || '';
+      sel.addEventListener('change', () => { batch.map[f.id] = sel.value; renderBatch(); });
+      map.append(el('label', { class: 'lbl' }, f.label), sel);
+    }
+    const names = Batch.fileNames(batch.rows, batch.map, batch.fields);
+    batch.rows.forEach((r, i) => list.append(el('div', {}, `${names[i]}  ·  ${batch.fields.map((f) => r[batch.map[f.id]] || '').filter(Boolean).slice(1).join(' · ')}`)));
+    list.hidden = false;
+  }
+  $('#batchPick').onclick = async () => {
+    const f = await pickFile('.csv,text/csv,text/plain');
+    if (f) loadCSV(await f.text(), f.name);
+  };
+  function loadCSV(text, name) {
+    const { headers, rows } = Batch.parseCSV(text);
+    if (!rows.length) return toast('That file has no rows under the header');
+    const fields = Batch.textFields(state);
+    batch = { name, headers, rows, fields, map: Batch.autoMap(fields, headers) };
+    renderBatch();
+  }
+  $('#batchClose').onclick = () => { if (exportJob) { batchCancelled = true; return; } bDlg.close(); };
+  bDlg.addEventListener('cancel', (e) => { if (exportJob) { e.preventDefault(); batchCancelled = true; } });
+  $('#batchReveal').onclick = () => batchDir && api.reveal(batchDir);
+  $('#batchGo').onclick = async () => {
+    const dir = await api.exporter.chooseFolder();
+    if (!dir) return;
+    batchDir = dir; batchCancelled = false;
+    const format = $('#batchFmt').value;
+    const names = Batch.fileNames(batch.rows, batch.map, batch.fields);
+    const bar = $('#batchProgress .bar'), label = $('#batchProgress span');
+    $('#batchProgress').hidden = false; $('#batchError').hidden = true; $('#batchGo').disabled = true; $('#batchClose').textContent = 'Cancel';
+    let done = 0;
+    try {
+      for (let i = 0; i < batch.rows.length; i++) {
+        const snap = Batch.fillRow(state, batch.fields, batch.map, batch.rows[i]);
+        const out = await api.exporter.pathIn(dir, names[i], format);
+        await renderToFile(snap, format, out, (n, total) => {
+          bar.style.width = `${((i + n / total) / batch.rows.length) * 100}%`;
+          label.textContent = `${i + 1} of ${batch.rows.length} · ${names[i]}`;
+        }, { bg: $('#exportBg').value, isCancelled: () => batchCancelled });
+        done++;
+      }
+      label.textContent = `Done: ${done} files`;
+      $('#batchReveal').hidden = false;
+      toast(`Batch export finished: ${done} files`);
+    } catch (err) {
+      if (err.message === 'cancelled') label.textContent = `Cancelled after ${done} files`;
+      else { $('#batchError').hidden = false; $('#batchError').textContent = String(err.message || err); }
+    } finally { $('#batchGo').disabled = false; $('#batchClose').textContent = 'Close'; }
+  };
+
+  // ---------- Live output (OBS) ----------
+  const lDlg = $('#liveDialog');
+  let liveOn = false, liveTimer = null, liveInfo = null;
+  function liveUI() {
+    $('#liveOn').hidden = !liveOn; $('#liveStop').hidden = !liveOn; $('#liveStart').hidden = liveOn;
+    $('#btnLive').classList.toggle('on', liveOn);
+    $('#btnLive').textContent = liveOn ? '● Live' : '● Go live';
+    $('#liveState').textContent = liveOn ? 'Live output is on. Thirdline must stay open while you stream.' : 'Live output is off. Turn it on to get a link for OBS.';
+    if (liveOn && liveInfo) {
+      $('#liveUrl').textContent = liveInfo.url;
+      $('#liveCueUrl').textContent = liveInfo.url.replace('/live', '/cue/toggle');
+      $('#liveSize').textContent = `${state.comp.width} × ${state.comp.height}`;
+    }
+  }
+  const pushLive = () => { if (!liveOn) return; clearTimeout(liveTimer); liveTimer = setTimeout(() => api.live.update(clone(state)), 150); };
+  function openLive() {
+    if (!api.live) return toast('Live output needs the desktop app.');
+    liveUI(); lDlg.showModal();
+  }
+  $('#liveStart').onclick = async () => {
+    try { liveInfo = await api.live.start({}); liveOn = true; await api.live.update(clone(state)); liveUI(); }
+    catch (e) { toast(`Couldn’t start live output: ${e.message || e}`); }
+  };
+  $('#liveStop').onclick = async () => { await api.live.stop(); liveOn = false; liveUI(); };
+  $('#liveClose').onclick = () => lDlg.close();
+  $('#liveUrl').onclick = () => { navigator.clipboard?.writeText($('#liveUrl').textContent).then(() => toast('Link copied')); };
+  lDlg.querySelectorAll('[data-cue]').forEach((b) => (b.onclick = () => api.live.cue(b.dataset.cue)));
+  $('#btnLive').onclick = openLive;
+
+  // ---------- Updates ----------
+  async function checkUpdates(manual) {
+    if (!api.updates) { if (manual) toast('Updates are checked in the desktop app.'); return; }
+    const r = await api.updates.check();
+    if (r.error) { if (manual) toast(`Couldn’t check for updates (${r.error})`); return; }
+    const pill = $('#updatePill');
+    if (r.available) {
+      pill.hidden = false; pill.textContent = `⬇ Update to ${r.latest}`;
+      pill.title = 'Downloads the new installer. Open it and drag Thirdline into Applications to replace this version.';
+      pill.onclick = () => { api.updates.open(r.url); toast('Downloading… open the file, then drag Thirdline into Applications and choose Replace.'); };
+      if (manual) pill.click();
+    } else if (manual) toast(`You have the latest version (${r.current})`);
   }
 
   // ---------- Keyboard ----------
@@ -1908,7 +2607,7 @@
       if (k === 'e') { e.preventDefault(); $('#btnExport').click(); return; }
     }
     if (e.key === 'Escape' && !ctxMenu.hidden) { closeMenu(); return; }
-    if (typing || dlg.open || gDlg.open) return;
+    if (typing || dlg.open || gDlg.open || bDlg.open || lDlg.open) return;
     if (e.code === 'Space') { e.preventDefault(); setPlaying(!playing); }
     else if (e.key === 'ArrowLeft') $('#btnPrevFrame').click();
     else if (e.key === 'ArrowRight') $('#btnNextFrame').click();
@@ -1918,7 +2617,8 @@
     else if ((e.key === 'Delete' || e.key === 'Backspace') && selKey) { e.preventDefault(); removeKey(selKey.path, selKey.k); changed({ sync: true }); updateKeyBar(); }
     else if (e.key.toLowerCase() === 'j') jumpKey(-1);
     else if (e.key.toLowerCase() === 'k') jumpKey(1);
-    else if (e.key === 'Tab' && document.activeElement === document.body) { e.preventDefault(); const order = ['backdrop', 'title', 'subtitle']; selectLayer(order[(order.indexOf(selected) + (e.shiftKey ? 2 : 1)) % 3]); }
+    else if (e.key === 'Tab' && document.activeElement === document.body) { e.preventDefault(); const order = tracks().map((t) => t[0]); selectLayer(order[(order.indexOf(selected) + (e.shiftKey ? order.length - 1 : 1)) % order.length]); }
+    else if ((e.key === 'Delete' || e.key === 'Backspace') && advanced && isExtra(selected)) { e.preventDefault(); deleteLayer(selected); }
   });
   $('#btnUndo').onclick = undo;
   $('#btnRedo').onclick = redo;
@@ -1926,17 +2626,21 @@
   // ---------- Boot ----------
   async function boot() {
     for (const f of await api.fonts.list()) await addUserFont(f);
-    showLeft = buildTabs($('nav[data-for=left]'), $('#leftBody'), leftTabs);
-    showRight = buildTabs($('nav[data-for=right]'), $('#rightBody'), rightTabs);
-    document.querySelectorAll('.layer-chips button').forEach((b) => (b.onclick = () => selectLayer(b.dataset.layer === selected ? null : b.dataset.layer)));
+    buildInspector();
+    buildEasyPanel();
+    renderLayerList(); renderAnimLib();
+    addStructureSync(renderLayerList);
     setAdvanced(advanced);
     syncControls(); refreshVisibility();
-    await refreshPresets();
+    saved = await api.presets.list();
     await document.fonts.ready; await ensureFonts();
     resizeCanvas();
+    showInspector(null);
     $('#btnHold').click();
     drawTimeline();
-    window.__l3rd = { get state() { return state; }, setTime, replaceState, render: drawPreview };
+    refreshGallery();
+    window.__l3rd = { get state() { return state; }, setTime, replaceState, render: drawPreview, selectLayer, addLayer, loadCSV, openBatch };
+    setTimeout(() => checkUpdates(false).catch(() => {}), 3000);
   }
   boot();
 })();
