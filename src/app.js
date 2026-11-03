@@ -966,6 +966,13 @@
         row({ label: 'Ends before end', type: 'range', path: `${base}.out.offset`, min: 0, max: 5, step: 0.05, unit: 's' }),
         easingControl(`${base}.out`),
       ]),
+      section(`${name} · While on screen`, [
+        row({ label: 'Loop', type: 'select', path: `${base}.loop.type`, options: Engine.LOOP_TYPES, onSet: () => changed({ sync: true }) }),
+        row({ label: 'Amount', type: 'range', path: `${base}.loop.amount`, min: 5, max: 200, unit: '%', show: () => lay(key) && lay(key).anim.loop && lay(key).anim.loop.type !== 'none' }),
+        row({ label: 'In sync', type: 'checkbox', path: `${base}.loop.together`, text: 'Start with the other layers', title: 'Same timing as the other layers, so they move as one', show: () => lay(key) && lay(key).anim.loop && lay(key).anim.loop.type !== 'none' }),
+        row({ label: 'Loop length', type: 'range', path: `${base}.loop.period`, min: 0.3, max: 8, step: 0.1, unit: 's', show: () => lay(key) && lay(key).anim.loop && lay(key).anim.loop.type !== 'none' }),
+        el('div', { class: 'sub' }, 'A gentle movement during the hold so long lower thirds don’t look frozen. It starts after the In animation and settles before the Out.'),
+      ]),
       section('Motion', [
         row({ label: 'Slide distance', type: 'range', path: `${base}.distance`, min: 0, max: 1200, unit: 'px' }),
         !isText ? null : row({ label: 'Stagger', type: 'range', path: `${base}.stagger`, min: 0, max: 0.95, step: 0.01, show: (s) => perUnit('in')(s) || perUnit('out')(s) }),
@@ -1605,8 +1612,17 @@
     }
     const parts = el('details', { class: 'parts', open: '' }, el('summary', {}, 'Animate each part'), el('div', {}, ...partRows));
     currentOwner = null;
+    const loopSel = el('select', { title: 'A gentle movement while it is on screen' });
+    fillSelect(loopSel, Engine.LOOP_TYPES);
+    loopSel.addEventListener('change', () => {
+      // The whole design moves together: same loop on the backdrop, title and subtitle.
+      for (const k of BUILTIN_IDS) state[k].anim.loop = { ...(state[k].anim.loop || {}), type: loopSel.value, amount: state[k].anim.loop?.amount ?? 50, period: state[k].anim.loop?.period ?? 2.5, together: true };
+      changed({ sync: true });
+    });
+    bind(() => { if (document.activeElement !== loopSel) loopSel.value = (state.title.anim.loop && state.title.anim.loop.type) || 'none'; });
     const step4 = el('div', { class: 'step' }, el('h3', {}, el('b', {}, '4'), 'Motion'), chips,
       el('div', { class: 'two', style: 'margin-top:10px' }, el('div', {}, el('label', { class: 'l' }, 'Speed'), speedSeg), el('div', {}, el('label', { class: 'l' }, 'On screen for'), stepper)),
+      el('label', { class: 'l', style: 'margin-top:10px' }, 'While on screen'), loopSel,
       parts);
 
     // Fine-tune: sizes and spacing, the things people nudge most.

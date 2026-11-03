@@ -5,6 +5,7 @@
     stagger: o.stagger ?? 0.35,
     in: { type: inType, duration: o.inDur ?? 0.6, delay: o.delay ?? 0, easing: o.inEase ?? 'easeOutCubic', bezier: [0.25, 0.1, 0.25, 1] },
     out: { type: outType, duration: o.outDur ?? 0.45, offset: o.offset ?? 0, easing: o.outEase ?? 'easeInCubic', bezier: [0.42, 0, 1, 1] },
+    loop: { type: 'none', amount: 50, period: 2.5, together: false },
   });
 
   const transform = (text) => ({ x: 0, y: 0, scale: 100, rotation: 0, opacity: 100, blur: 0, anchorX: 50, anchorY: 50, ...(text ? { tracking: 0 } : {}) });

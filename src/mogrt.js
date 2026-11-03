@@ -898,7 +898,9 @@
     if (CFG.boxLayer && !CFG.L.backdrop) CFG.boxLayer = null;
     if (!CFG.boxLayer) CFG.L.backdrop = CFG.L.backdrop || { kind: 'backdrop', name: null, anim: bd.anim, vals: TR_DEFAULT };
 
-    // Parenting (Engine parentChain): only between layers that made it into the comp.
+    if (Engine.layerOrder(st).some((id) => { const l = Engine.getLayer(st, id); return l && l.anim && l.anim.loop && l.anim.loop.type && l.anim.loop.type !== 'none'; })) warn('“While on screen” loops aren’t carried over to After Effects yet.');
+    // Vertical / square design scale is an export setting, not part of the template.
+        // Parenting (Engine parentChain): only between layers that made it into the comp.
     for (const id of Object.keys(CFG.L)) {
       const p = (Engine.getLayer(st, id) || {}).parent;
       if (p && CFG.L[p]) CFG.L[id].parent = p;

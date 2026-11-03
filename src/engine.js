@@ -307,6 +307,38 @@
     }
     if (withAlpha && (tr.opacity ?? 100) < 100) ctx.globalAlpha *= clamp((tr.opacity ?? 100) / 100);
   }
+  // ---------- Idle loops (while the layer is on screen) ----------
+  // anim.loop = { type, amount (%), period (s) }. Starts at rest when the In animation ends, eases
+  // in over a moment and eases out before the Out animation, so nothing jumps.
+  let togetherSpan = null;
+  const LOOP_TYPES = { none: 'None', pulse: 'Pulse (gentle zoom)', float: 'Float (up and down)', drift: 'Drift (side to side)', breathe: 'Breathe (opacity)', wiggle: 'Wiggle (tilt)' };
+  function loopAt(anim, t, duration) {
+    const lp = anim && anim.loop;
+    if (!lp || !lp.type || lp.type === 'none') return null;
+    // "together": every layer uses the same window (after the last In, before the first Out), so the
+    // whole design moves as one.
+    const sp = lp.together && togetherSpan ? togetherSpan : timingSpans(anim, duration);
+    if (t <= sp.inEnd || t >= sp.outStart) return null;
+    const ramp = Math.min(1, (t - sp.inEnd) / 0.4, (sp.outStart - t) / 0.3);
+    const k = ramp * ramp * (3 - 2 * ramp);
+    const per = Math.max(0.2, lp.period || 2), a = (lp.amount ?? 50) / 100;
+    const ph = ((t - sp.inEnd) / per) * Math.PI * 2;
+    // v swings both ways (−1…1), u goes out and back (0…1); both start and end at rest.
+    return { type: lp.type, v: Math.sin(ph) * k, u: ((1 - Math.cos(ph)) / 2) * k, a };
+  }
+  function applyLoop(ctx, anim, t, duration, b, pivot) {
+    const L = loopAt(anim, t, duration);
+    if (!L) return;
+    const [cx, cy] = pivot || [b.x + b.w / 2, b.y + b.h / 2];
+    switch (L.type) {
+      case 'pulse': { const s = 1 + 0.06 * L.a * L.u; ctx.translate(cx, cy); ctx.scale(s, s); ctx.translate(-cx, -cy); break; }
+      case 'float': ctx.translate(0, -12 * L.a * L.v); break;
+      case 'drift': ctx.translate(14 * L.a * L.v, 0); break;
+      case 'breathe': ctx.globalAlpha *= 1 - 0.4 * L.a * L.u; break;
+      case 'wiggle': ctx.translate(cx, cy); ctx.rotate((3 * L.a * L.v * Math.PI) / 180); ctx.translate(-cx, -cy); break;
+      default: break;
+    }
+  }
   const blurFilter = (b) => (b > 0.05 ? `blur(${b.toFixed(2)}px)` : 'none');
 
   // ---------- Parenting ----------
@@ -339,6 +371,7 @@
         const ph = phaseAt(g.anim, curT, state.comp.duration);
         const r = animParams(effType(ph), ph.p, f.b, g.anim.distance, anchored(f.tr) ? pivotOf(f.tr, f.b) : null);
         applyParams(ctx, r, 200, 0);
+        applyLoop(ctx, g.anim, curT, state.comp.duration, f.b, pivotOf(f.tr, f.b));
       }
     }
   }
@@ -782,6 +815,7 @@
     ctx.fillStyle = s.color;
     textShadow(ctx, s);
     applyLayerTransform(ctx, tr, b);
+    applyLoop(ctx, s.anim, curT, state.comp.duration, b, pivotOf(tr, b));
     layerBlur = tr.blur || 0;
 
     if (perUnit || animators.length) {
@@ -1008,6 +1042,7 @@
     const r = animParams(effType(ph), ph.p, b, ly.anim.distance, anchored(tr) ? pivotOf(tr, b) : null);
     ctx.save();
     applyLayerTransform(ctx, tr, b);
+    applyLoop(ctx, ly.anim, curT, state.comp.duration, b, pivotOf(tr, b));
     layerBlur = tr.blur || 0;
     applyParams(ctx, r, 200, bleed(ly));
     if (layerBlur > 0.05 && !(r.blur > 0.05)) ctx.filter = blurFilter(layerBlur);
@@ -1065,6 +1100,10 @@
     // Design scale (used by the vertical / square versions): the whole design scales around the
     // layout anchor point, masks included.
     const ds = state.comp.designScale || 1;
+    {
+      const spans = layerOrder(state).map((k) => getLayer(state, k)).filter((l) => l && l.visible !== false && l.anim).map((l) => timingSpans(l.anim, duration));
+      togetherSpan = spans.length ? { inEnd: Math.max(...spans.map((x) => x.inEnd)), outStart: Math.min(...spans.map((x) => x.outStart)) } : null;
+    }
     ctx.save();
     if (ds !== 1) { ctx.translate(state.layout.x, state.layout.y); ctx.scale(ds, ds); ctx.translate(-state.layout.x, -state.layout.y); }
     for (const id of layerOrder(state)) {
@@ -1081,6 +1120,7 @@
           applyParents(c, state, L, 'backdrop', true);
           const tr = bd.transform || NO_TR;
           applyLayerTransform(c, tr, bb);
+          applyLoop(c, bd.anim, t, duration, bb, pivotOf(tr, bb));
           layerBlur = tr.blur || 0;
           applyParams(c, r, margin, bleed(bd));
           if (layerBlur > 0.05 && !(r.blur > 0.05)) c.filter = blurFilter(layerBlur);
@@ -1301,7 +1341,7 @@
   }
 
   global.Engine = {
-    BACKDROP_ANIMS, TEXT_ANIMS, SHAPES, GRADIENT_TYPES, GRADIENT_ANIMS, BLEND_MODES, EXTRA_KINDS, EXTRA_SHAPES, getLayer, layerOrder,
+    BACKDROP_ANIMS, TEXT_ANIMS, LOOP_TYPES, loopAt, SHAPES, GRADIENT_TYPES, GRADIENT_ANIMS, BLEND_MODES, EXTRA_KINDS, EXTRA_SHAPES, getLayer, layerOrder,
     render, renderFrame, computeLayout, layoutAt, bleed, pivotOf, anchorScreen, parentChain, parentFrames, toParentSpace, fromParentSpace, screenRect, measureLine, fitTextSizes, extraBoxes, PER_CHAR, PER_WORD, OUT_SWAP, phaseAt, timingSpans, imagesReady, getImage, hitTest, resolveAt, valueAtKeys, selectorAmount,
     set onImageLoad(fn) { onImageLoad = fn; },
   };

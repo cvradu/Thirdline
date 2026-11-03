@@ -20,6 +20,12 @@ The app has two modes. **Easy** walks you through three steps (pick a style, typ
 - **Selecting several keyframes:** Shift-click keyframes, or drag a box around them on the timeline, then drag them together, change their easing in one go or delete them.
 - **Brand kits:** Brand ▾ in the top bar saves your colours, fonts and logo; pick a kit to apply it, and while it's on every style in the gallery uses it.
 - **Timeline zoom:** Alt/Option + scroll (or pinch) zooms the timeline around the mouse, Shift + scroll pans, double-click the ruler to fit.
+- **Copy, paste, duplicate:** Cmd/Ctrl+C / V / D on keyframes (they paste at the playhead, onto the selected layer if it has the same property) and on layers (a copy of the title or subtitle becomes a new text layer).
+- **Align and distribute:** Shift-click layers in the list or the preview, then use the Align buttons in the Transform section (one layer aligns to the backdrop, several to each other, or pick "Video frame"). Dragging one of several selected layers moves them all.
+- **Motion path:** a layer with position keyframes shows the path it travels in the preview, a dot per frame and a square per keyframe; drag a square to move that keyframe.
+- **Groups:** Cmd/Ctrl+G groups the selected layers (Shift+Cmd/Ctrl+G ungroups). Everything in a group moves, scales, rotates, fades and animates with it, including the group's own In/Out animation.
+- **While on screen:** pulse, float, drift, breathe or wiggle during the hold so long lower thirds don't look frozen (per layer in Advanced, for the whole design in Easy).
+- **Vertical and square versions:** tick 9:16 and/or 1:1 in Export to get extra files with the design re-placed and sized for that frame.
 - **Panels:** drag the edges of the side panels and the timeline to resize them, drag a panel's ⋮⋮ grip to swap the side panels or put the timeline above the preview. File > Reset panel layout (or View > Reset Panel Layout) puts everything back.
 - **Easing menu and graph editor:** right-click any keyframe or preset ramp to pick its easing. Double-click it (or press **Graph…**) to open the graph editor and drag the bezier handles to shape the value curve, with the speed curve shown underneath, like After Effects.
 - **Masks:** per-layer rectangle/ellipse masks with feather, rounded corners and invert; keyframe them or use the quick wipe/rise/iris reveal presets.
