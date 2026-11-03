@@ -1165,6 +1165,15 @@
     return null;
   }
 
+  // On-screen bounding box of a layer (after its own transform and its parents').
+  function screenRect(b) {
+    if (!b) return null;
+    const tr = b.tr || NO_TR;
+    const pts = [[b.x, b.y], [b.x + b.w, b.y], [b.x + b.w, b.y + b.h], [b.x, b.y + b.h]].map(([x, y]) => fromParentSpace(b.parents, ...fwdPt(tr, b, x, y)));
+    const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+    const x = Math.min(...xs), y = Math.min(...ys);
+    return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };
+  }
   // Where a layer's anchor point is on screen (rotation/scale leave the pivot itself in place).
   function anchorScreen(state, id, b) {
     const tr = (getLayer(state, id) || {}).transform || NO_TR;
@@ -1237,6 +1246,13 @@
         ctx.restore();
       }
     }
+    // Other layers in a multi-selection: a lighter outline.
+    for (const id of opts.also || []) {
+      if (id === opts.selected || !L.layers[id]) continue;
+      const r = screenRect(L.layers[id]);
+      ctx.save(); ctx.strokeStyle = 'rgba(245,158,11,0.75)'; ctx.lineWidth = 1.5 * lw; ctx.setLineDash([4 * lw, 4 * lw]);
+      ctx.strokeRect(r.x - 3 * lw, r.y - 3 * lw, r.w + 6 * lw, r.h + 6 * lw); ctx.restore();
+    }
     if (opts.bounds) {
       ctx.strokeStyle = 'rgba(255,80,160,0.9)';
       ctx.setLineDash([4 * lw, 4 * lw]);
@@ -1247,7 +1263,7 @@
 
   global.Engine = {
     BACKDROP_ANIMS, TEXT_ANIMS, SHAPES, GRADIENT_TYPES, GRADIENT_ANIMS, BLEND_MODES, EXTRA_KINDS, EXTRA_SHAPES, getLayer, layerOrder,
-    render, renderFrame, computeLayout, layoutAt, bleed, pivotOf, anchorScreen, parentChain, parentFrames, toParentSpace, fromParentSpace, measureLine, fitTextSizes, extraBoxes, PER_CHAR, PER_WORD, OUT_SWAP, phaseAt, timingSpans, imagesReady, getImage, hitTest, resolveAt, valueAtKeys, selectorAmount,
+    render, renderFrame, computeLayout, layoutAt, bleed, pivotOf, anchorScreen, parentChain, parentFrames, toParentSpace, fromParentSpace, screenRect, measureLine, fitTextSizes, extraBoxes, PER_CHAR, PER_WORD, OUT_SWAP, phaseAt, timingSpans, imagesReady, getImage, hitTest, resolveAt, valueAtKeys, selectorAmount,
     set onImageLoad(fn) { onImageLoad = fn; },
   };
 })(typeof window !== 'undefined' ? window : globalThis);

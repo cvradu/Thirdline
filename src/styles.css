@@ -308,3 +308,8 @@ details.parts > summary::before { content: '▸ '; } details.parts[open] > summa
 .brand-menu .brand-item.on { background: #f59e0b22; }
 .brand-menu .empty { padding: 8px 10px; color: var(--muted); font-size: 12px; }
 #btnBrand.active { color: var(--accent); }
+
+.align-row { display: flex; flex-direction: column; gap: 4px; }
+.align-row .btnrow { display: flex; flex-wrap: wrap; gap: 3px; }
+.align-row .btnrow button { padding: 3px 7px; min-width: 26px; font-size: 13px; }
+.layer-row.multi { outline: 1px dashed var(--accent); outline-offset: -1px; }

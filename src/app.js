@@ -188,6 +188,7 @@
   // Top layer first, like the After Effects timeline.
   const tracks = () => Engine.layerOrder(state).slice().reverse().map((k) => [k, layerName(k), layerColor(k)]);
   const keyLabels = {};
+  let extraPaneFor = null; // extra layer whose inspector pane is built
   // Panel sizes and positions (see Panel layout), kept between launches.
   const LAYOUT_KEY = 'thirdline:layout';
   let panelLayout = {};
@@ -259,7 +260,7 @@
   function descendantsOf(key) {
     const out = new Set([key]);
     let grew = true;
-    while (grew) { grew = false; for (const [k] of tracks()) if (!out.has(k) && out.has(lay(k).parent)) { out.add(k); grew = true; } }
+    while (grew) { grew = false; for (const [k] of tracks()) if (!out.has(k) && out.has((lay(k) || {}).parent)) { out.add(k); grew = true; } }
     return out;
   }
   function setParent(key, parent) {
@@ -285,11 +286,60 @@
     const s = el('select', { title: 'Follow another layer’s position, rotation and scale (like parenting in After Effects)' });
     s.addEventListener('change', () => setParent(key, s.value));
     addStructureSync(() => {
+      if (!lay(key)) return; // layer was deleted
       const bad = descendantsOf(key);
       fillSelect(s, [['', 'None'], ...tracks().filter(([k]) => !bad.has(k)).map(([k, n]) => [k, n])]);
       s.value = lay(key).parent || '';
     }, s);
     return s;
+  }
+  // Align / distribute: by screen bounds. One layer aligns to the backdrop box (the backdrop to
+  // the frame); several align to each other. "Frame" forces the video frame.
+  let alignTo = 'auto';
+  function alignLayers(how) {
+    const ids = (multiSel.length > 1 ? multiSel : [selected]).filter((k) => k && lastLayout.layers[k]);
+    if (!ids.length) return;
+    const R = Object.fromEntries(ids.map((k) => [k, Engine.screenRect(lastLayout.layers[k])]));
+    const W = state.comp.width, H = state.comp.height;
+    let ref;
+    if (alignTo === 'frame') ref = { x: 0, y: 0, w: W, h: H };
+    else if (ids.length > 1) { const xs = ids.map((k) => R[k]); const x = Math.min(...xs.map((r) => r.x)), y = Math.min(...xs.map((r) => r.y)); ref = { x, y, w: Math.max(...xs.map((r) => r.x + r.w)) - x, h: Math.max(...xs.map((r) => r.y + r.h)) - y }; }
+    else ref = ids[0] === 'backdrop' ? { x: 0, y: 0, w: W, h: H } : Engine.screenRect(lastLayout.layers.backdrop) || { x: 0, y: 0, w: W, h: H };
+    const move = {};
+    if (how === 'distH' || how === 'distV') {
+      if (ids.length < 3) return toast('Select three or more layers to distribute (Shift-click in the layer list)');
+      const ax = how === 'distH' ? 'x' : 'y', sz = how === 'distH' ? 'w' : 'h';
+      const sorted = ids.slice().sort((a, b) => (R[a][ax] + R[a][sz] / 2) - (R[b][ax] + R[b][sz] / 2));
+      const c0 = R[sorted[0]][ax] + R[sorted[0]][sz] / 2, c1 = R[sorted[sorted.length - 1]][ax] + R[sorted[sorted.length - 1]][sz] / 2;
+      sorted.forEach((k, i) => { const want = c0 + ((c1 - c0) * i) / (sorted.length - 1); move[k] = ax === 'x' ? [want - (R[k].x + R[k].w / 2), 0] : [0, want - (R[k].y + R[k].h / 2)]; });
+    } else for (const k of ids) {
+      const r = R[k];
+      const dx = { left: ref.x - r.x, centerH: ref.x + ref.w / 2 - (r.x + r.w / 2), right: ref.x + ref.w - (r.x + r.w) }[how] ?? 0;
+      const dy = { top: ref.y - r.y, middle: ref.y + ref.h / 2 - (r.y + r.h / 2), bottom: ref.y + ref.h - (r.y + r.h) }[how] ?? 0;
+      move[k] = [dx, dy];
+    }
+    for (const [k, [dx, dy]] of Object.entries(move)) {
+      if (Math.abs(dx) < 0.01 && Math.abs(dy) < 0.01) continue;
+      // Skip children whose parent is moving too: they follow it.
+      if (Object.keys(move).some((p) => p !== k && Engine.parentChain(state, k).includes(p))) continue;
+      const fr = lastLayout.layers[k].parents;
+      const [ax0, ay0] = Engine.toParentSpace(fr, 0, 0), [ax1, ay1] = Engine.toParentSpace(fr, dx, dy);
+      const tp = (q) => `${pp(k)}.transform.${q}`;
+      setValue(tp('x'), Math.round(((valueNow(tp('x')) || 0) + ax1 - ax0) * 10) / 10);
+      setValue(tp('y'), Math.round(((valueNow(tp('y')) || 0) + ay1 - ay0) * 10) / 10);
+    }
+    changed({ sync: true });
+  }
+  function alignRow() {
+    const b = (how, label, title) => el('button', { type: 'button', title, onclick: () => alignLayers(how) }, label);
+    const to = el('select', { title: 'What to align to' });
+    fillSelect(to, [['auto', 'Backdrop / each other'], ['frame', 'Video frame']]);
+    to.value = alignTo; to.addEventListener('change', () => { alignTo = to.value; });
+    return el('div', { class: 'align-row' },
+      el('div', { class: 'btnrow' }, b('left', '⇤', 'Align left edges'), b('centerH', '↔', 'Align horizontal centres'), b('right', '⇥', 'Align right edges'),
+        b('top', '⤒', 'Align top edges'), b('middle', '↕', 'Align vertical centres'), b('bottom', '⤓', 'Align bottom edges'),
+        b('distH', '⋯', 'Distribute horizontally (3+ layers)'), b('distV', '⋮', 'Distribute vertically (3+ layers)')),
+      to);
   }
   function clearKeys(prefix) {
     for (const p of Object.keys(state.keys || {})) if (p.startsWith(prefix)) { const v = valueNow(p); delete state.keys[p]; setPath(state, p, v); }
@@ -464,7 +514,11 @@
   }
   let currentOwner = null;
   const structureSyncs = [];
-  function syncControls() { for (const f of structureSyncs) f(); for (const c of controls) c.sync(); }
+  function syncControls() {
+    // The extra-layer inspector belongs to one layer: drop it if that layer is gone (undo, new project…).
+    if (extraPaneFor && !(state.layers && state.layers[extraPaneFor])) { dropExtraPane(); if (selected && !lay(selected)) selected = null; }
+    for (const f of structureSyncs) f(); for (const c of controls) c.sync();
+  }
   function dropControls(owner) {
     for (let i = controls.length - 1; i >= 0; i--) if (controls[i].owner === owner) controls.splice(i, 1);
     for (let i = structureSyncs.length - 1; i >= 0; i--) if (structureSyncs[i].owner === owner) structureSyncs.splice(i, 1);
@@ -882,6 +936,7 @@
       row({ label: 'Anchor Y', type: 'range', path: tp('anchorY'), key: true, min: -100, max: 200, step: 0.5, unit: '%', title: '0 = top, 50 = centre, 100 = bottom' }),
       el('div', { class: 'row' }, el('label', {}, 'Anchor'), anchorGrid(key)),
       el('div', { class: 'row' }, el('label', {}, 'Parent'), parentPicker(key)),
+      el('div', { class: 'row', title: 'Shift-click layers in the list or the preview to align several' }, el('label', {}, 'Align'), alignRow()),
       row({ label: 'Scale', type: 'range', path: tp('scale'), key: true, min: 0, max: 400, unit: '%' }),
       row({ label: 'Rotation', type: 'range', path: tp('rotation'), key: true, min: -360, max: 360, step: 0.5, unit: '°' }),
       row({ label: 'Opacity', type: 'range', path: tp('opacity'), key: true, min: 0, max: 100, unit: '%' }),
@@ -1162,7 +1217,6 @@
     const [transform, mask, ...rest] = a;
     return [inspHead(id), transform, ...content, placementSection(id), mask, ...rest].filter(Boolean).map(foldable);
   }
-  let extraPaneFor = null;
   function showInspector(key) {
     for (const [k, pane] of Object.entries(inspPanes)) pane.hidden = k !== (key && !isExtra(key) ? key : key ? '__extra' : 'comp');
     if (key && isExtra(key)) {
@@ -1195,7 +1249,7 @@
   let dragLayer = null;
   let layerSig = '';
   function renderLayerList() {
-    const sig = JSON.stringify([tracks(), selected, Engine.layerOrder(state).map((k) => lay(k).visible)]);
+    const sig = JSON.stringify([tracks(), selected, multiSel, Engine.layerOrder(state).map((k) => lay(k).visible)]);
     if (sig === layerSig) return;
     layerSig = sig;
     const list = $('#layerList'); list.innerHTML = '';
@@ -1204,7 +1258,7 @@
       const hidden = ly.visible === false;
       const icon = k === 'backdrop' ? '▭' : k === 'title' || k === 'subtitle' ? 'T' : KIND_ICON[ly.kind] || '■';
       const eye = el('button', { class: 'eye' + (hidden ? ' off' : ''), title: hidden ? 'Show layer' : 'Hide layer', onclick: (e) => { e.stopPropagation(); ly.visible = hidden; changed({ sync: true }); renderLayerList(); } }, '👁');
-      const rowEl = el('div', { class: 'layer-row' + (selected === k ? ' on' : '') + (hidden ? ' hidden-layer' : ''), draggable: 'true', 'data-layer': k, onclick: () => selectLayer(k) },
+      const rowEl = el('div', { class: 'layer-row' + (selected === k ? ' on' : '') + (multiSel.length > 1 && multiSel.includes(k) ? ' multi' : '') + (hidden ? ' hidden-layer' : ''), draggable: 'true', 'data-layer': k, onclick: (e) => { if (advanced && (e.shiftKey || e.metaKey || e.ctrlKey)) toggleMulti(k); else selectLayer(k); } },
         el('span', { class: 'ic', style: `background:${color}` }, icon), el('span', { class: 'nm' }, name), eye,
         isExtra(k) ? el('button', { class: 'x', title: 'Delete layer', onclick: (e) => { e.stopPropagation(); deleteLayer(k); } }, '✕') : null);
       rowEl.addEventListener('dragstart', () => { dragLayer = k; });
@@ -1285,9 +1339,20 @@
   // ---------- Layer selection ----------
   let selected = null;
   const sectionRefs = {};
-  function selectLayer(k, { reveal = true } = {}) {
+  // Shift/Cmd-click in the layer list or the preview adds layers to the selection (for Align).
+  let multiSel = [];
+  function toggleMulti(k) {
+    if (!k) return;
+    if (!multiSel.length && selected) multiSel = [selected];
+    if (multiSel.includes(k)) { multiSel = multiSel.filter((x) => x !== k); if (selected === k) selected = multiSel[multiSel.length - 1] || null; }
+    else multiSel.push(k);
+    selectLayer(multiSel[multiSel.length - 1] || null, { keepMulti: true });
+  }
+  function selectLayer(k, { reveal = true, keepMulti = false } = {}) {
     if (k && !lay(k)) k = null;
+    if (!keepMulti) multiSel = k ? [k] : [];
     selected = k;
+    document.querySelectorAll('.layer-row').forEach((r) => r.classList.toggle('multi', multiSel.length > 1 && multiSel.includes(r.dataset.layer)));
     document.querySelectorAll('.layer-row').forEach((r) => r.classList.toggle('on', r.dataset.layer === k));
     showInspector(k);
     if (reveal === 'focus' && !advanced) {
@@ -1897,7 +1962,7 @@
     if (preview.width !== state.comp.width || preview.height !== state.comp.height) { preview.width = state.comp.width; preview.height = state.comp.height; fitFrame(); }
     const mb = state.comp.motionBlur;
     const mbOpts = mb && mb.enabled && mb.preview && !dragging ? { samples: Math.min(mb.samples, playing ? 4 : 8) } : { noMotionBlur: true };
-    lastLayout = Engine.renderFrame(pctx, state, time, { guides: true, safeAreas: view.safeAreas, bounds: view.bounds || dragging, selected, anchor: advanced, ...mbOpts });
+    lastLayout = Engine.renderFrame(pctx, state, time, { guides: true, safeAreas: view.safeAreas, bounds: view.bounds || dragging, selected, also: advanced && multiSel.length > 1 ? multiSel : null, anchor: advanced, ...mbOpts });
     const fps = state.comp.fps;
     const f = Math.round(time * fps);
     $('#timecode').textContent = `${time.toFixed(2)}s · f${f} / ${Math.round(state.comp.duration * fps)}`;
@@ -1936,10 +2001,17 @@
   preview.addEventListener('pointerdown', (e) => {
     const [cx, cy] = toComp(e);
     const hit = Engine.hitTest(lastLayout, cx, cy);
-    if (hit !== selected) selectLayer(hit);
+    if (advanced && hit && selected && hit !== selected && (e.shiftKey || e.metaKey || e.ctrlKey)) { toggleMulti(hit); return; }
+    if (hit !== selected && !(hit && multiSel.includes(hit))) selectLayer(hit);
+    else if (hit && hit !== selected) selectLayer(hit, { keepMulti: true });
     dragging = true; preview.setPointerCapture(e.pointerId);
     dragStart = { m: [cx, cy], x: state.layout.x, y: state.layout.y };
-    if (advanced && hit && hit === selected) dragStart.layer = { key: hit, x: valueNow(`${pp(hit)}.transform.x`), y: valueNow(`${pp(hit)}.transform.y`), frames: (lastLayout.layers[hit] || {}).parents || [] };
+    const grab = (k) => ({ key: k, x: valueNow(`${pp(k)}.transform.x`), y: valueNow(`${pp(k)}.transform.y`), frames: (lastLayout.layers[k] || {}).parents || [] });
+    if (advanced && hit && hit === selected) {
+      dragStart.layer = grab(hit);
+      // Dragging one layer of a multi-selection moves them all (a parent's children follow on their own).
+      dragStart.group = multiSel.length > 1 && multiSel.includes(hit) ? multiSel.filter((k) => !multiSel.some((p) => Engine.parentChain(state, k).includes(p))).map(grab) : [dragStart.layer];
+    }
   });
   // Advanced: grab the anchor point of the selected layer to move it.
   function anchorHit(e) {
@@ -1989,11 +2061,12 @@
       if (Math.abs(mx - dragStart.m[0]) >= Math.abs(my - dragStart.m[1])) my = dragStart.m[1]; else mx = dragStart.m[0];
     }
     if (dragStart.layer) {
-      const d = dragStart.layer;
-      // A parented layer moves in its parent's (possibly rotated or scaled) space.
-      const [qx, qy] = Engine.toParentSpace(d.frames, mx, my), [q0x, q0y] = Engine.toParentSpace(d.frames, ...dragStart.m);
-      setValue(`${pp(d.key)}.transform.x`, Math.round(d.x + qx - q0x));
-      setValue(`${pp(d.key)}.transform.y`, Math.round(d.y + qy - q0y));
+      for (const d of dragStart.group || [dragStart.layer]) {
+        // A parented layer moves in its parent's (possibly rotated or scaled) space.
+        const [qx, qy] = Engine.toParentSpace(d.frames, mx, my), [q0x, q0y] = Engine.toParentSpace(d.frames, ...dragStart.m);
+        setValue(`${pp(d.key)}.transform.x`, Math.round(d.x + qx - q0x));
+        setValue(`${pp(d.key)}.transform.y`, Math.round(d.y + qy - q0y));
+      }
       changed({ sync: true });
       return;
     }
@@ -2895,7 +2968,7 @@
   api.project.onOpenPath(async (p) => { if (!confirmDiscard()) return; const r = await api.project.read(p); if (r) loadProjectText(r.text, r.path); });
   api.onMenu((cmd) => ({
     new: newProject, open: openProject, save: () => saveProject(false), saveAs: () => saveProject(true),
-    export: () => $('#btnExport').click(), undo, redo, batch: openBatch, live: openLive, mogrt: () => openMogrt(), updates: () => checkUpdates(true), resetLayout: () => resetLayout(),
+    export: () => $('#btnExport').click(), undo, redo, batch: openBatch, live: openLive, mogrt: () => openMogrt(), updates: () => checkUpdates(true), resetLayout: () => resetLayout(), duplicate: () => duplicateSelection(),
   })[cmd]?.());
   $('#btnNew').onclick = newProject;
   $('#btnOpen').onclick = openProject;
@@ -3234,6 +3307,97 @@
   $('#btnUndo').onclick = undo;
   $('#btnRedo').onclick = redo;
 
+  // ---------- Copy, paste, duplicate (keyframes and layers) ----------
+  let clip = null;
+  const busy = () => { const a = document.activeElement; return (/^(INPUT|TEXTAREA|SELECT)$/.test(a?.tagName) && !['checkbox', 'range', 'radio'].includes(a.type)) || dlg.open || gDlg.open || bDlg.open || lDlg.open || (window.getSelection && String(window.getSelection())); };
+  // Keyframes are stored relative to the first one, so they paste at the playhead.
+  function copySelection() {
+    if (selKeys.length) {
+      const t0 = Math.min(...selKeys.map((s) => s.k.t));
+      clip = { kind: 'keys', layer: pathLayer(selKeys[0].path), items: selKeys.map((s) => ({ path: s.path, k: { ...clone(s.k), t: s.k.t - t0 } })) };
+      toast(`Copied ${selKeys.length} keyframe${selKeys.length > 1 ? 's' : ''}`);
+      return true;
+    }
+    if (selected && selected !== 'backdrop') {
+      const pre = `${pp(selected)}.`;
+      clip = { kind: 'layer', from: selected, layer: clone(lay(selected)), keys: Object.fromEntries(Object.entries(state.keys || {}).filter(([p]) => p.startsWith(pre)).map(([p, ks]) => [p.slice(pre.length), clone(ks)])) };
+      toast(`Copied layer “${layerName(selected)}”`);
+      return true;
+    }
+    if (selected === 'backdrop') toast('The backdrop can’t be copied (there is only one). Copy its keyframes instead.');
+    return false;
+  }
+  // Same property on another layer: title.transform.x → layers.<id>.transform.x when pasting onto another layer.
+  function retarget(path, fromLayer, toLayer) {
+    if (!toLayer || toLayer === fromLayer || pathLayer(path) !== fromLayer) return path;
+    return `${pp(toLayer)}.${path.slice(pp(fromLayer).length + 1)}`;
+  }
+  function pasteKeys() {
+    const target = selected && selected !== clip.layer && clip.items.every((it) => pathLayer(it.path) === clip.layer) ? selected : null;
+    const added = [];
+    for (const it of clip.items) {
+      const path = retarget(it.path, clip.layer, target);
+      if (getPath(state, path) === undefined) continue;
+      const t = fpsT(Math.min(state.comp.duration, time + it.k.t));
+      state.keys ??= {};
+      const ks = (state.keys[path] ??= []);
+      const i = keyIndexAt(path, t);
+      const k = { ...clone(it.k), t };
+      if (i >= 0) ks[i] = k; else ks.push(k);
+      sortKeys(path);
+      added.push({ path, k });
+    }
+    if (!added.length) return toast('Those keyframes don’t fit this layer');
+    selKeys = added; selKey = added[added.length - 1]; selPreset = null;
+    changed({ sync: true }); updateKeyBar(); drawTimeline();
+    toast(`Pasted ${added.length} keyframe${added.length > 1 ? 's' : ''} at ${time.toFixed(2)}s`);
+  }
+  // A copy of a layer: extra layers copy as they are, title/subtitle become an extra text layer.
+  function pasteLayer(src = clip) {
+    let ly = clone(src.layer);
+    if (src.from === 'title' || src.from === 'subtitle') {
+      const L = lastLayout, line = L && L[src.from], box = L && L.box;
+      const { anim, transform, mask, animators, ...style } = ly;
+      ly = Presets.newLayer('text', { ...style, anim, transform, mask, animators: animators || [], name: `${layerName(src.from)} copy`, attach: 'box', ax: 0, ay: 0,
+        x: line && box ? Math.round(line.x - box.x) : 0, y: line && box ? Math.round(line.top - box.y) + 24 : 24 });
+      delete ly.parent;
+    } else {
+      ly.name = `${ly.name || layerName(src.from)} copy`;
+      ly.y = (ly.y || 0) + 24;
+      delete ly.brandLogo;
+    }
+    const id = newId();
+    state.layers = { ...(state.layers || {}), [id]: ly };
+    const order = Engine.layerOrder(state).filter((x) => x !== id);
+    const at = order.indexOf(src.from);
+    order.splice(at >= 0 ? at + 1 : order.length, 0, id);
+    state.order = order;
+    for (const [rest, ks] of Object.entries(src.keys || {})) { state.keys ??= {}; state.keys[`layers.${id}.${rest}`] = clone(ks); }
+    changed({ sync: true });
+    selectLayer(id);
+    toast(`Added “${ly.name}”`);
+  }
+  function duplicateSelection() {
+    if (selKeys.length) { const keep = clip; if (copySelection()) { setTime(Math.min(state.comp.duration, Math.max(...selKeys.map((s) => s.k.t)) + 1 / state.comp.fps)); pasteKeys(); } clip = keep; return; }
+    if (!selected || selected === 'backdrop') return toast('Select a layer or keyframes to duplicate');
+    const pre = `${pp(selected)}.`;
+    pasteLayer({ kind: 'layer', from: selected, layer: clone(lay(selected)), keys: Object.fromEntries(Object.entries(state.keys || {}).filter(([p]) => p.startsWith(pre)).map(([p, ks]) => [p.slice(pre.length), clone(ks)])) });
+  }
+  document.addEventListener('copy', (e) => { if (busy()) return; if (copySelection()) e.preventDefault(); });
+  document.addEventListener('cut', (e) => {
+    if (busy()) return;
+    if (copySelection()) { e.preventDefault(); if (clip.kind === 'keys') deleteSelectedKeys(); else if (isExtra(selected)) deleteLayer(selected); }
+  });
+  document.addEventListener('paste', (e) => {
+    if (busy() || !clip) return;
+    e.preventDefault();
+    if (clip.kind === 'keys') pasteKeys(); else pasteLayer();
+  });
+  document.addEventListener('keydown', (e) => {
+    // In the desktop app the Edit menu's Duplicate (Cmd/Ctrl+D) does this.
+    if (api.browser && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'd' && !busy()) { e.preventDefault(); duplicateSelection(); }
+  });
+
   // ---------- Boot ----------
   async function boot() {
     for (const f of await api.fonts.list()) await addUserFont(f);
@@ -3252,7 +3416,8 @@
     drawTimeline();
     refreshGallery();
     window.__l3rd = { get state() { return state; }, setTime, replaceState, render: drawPreview, selectLayer, addLayer, loadCSV, openBatch, openMogrt,
-      selKeyCount: () => selKeys.length, selKeyTimes: () => selKeys.map((s) => s.k.t),
+      selKeyCount: () => selKeys.length, multiSel: () => multiSel.slice(),
+      selectAllKeysOf: (path) => { selKeys = (state.keys[path] || []).map((k) => ({ path, k })); selKey = selKeys[selKeys.length - 1] || null; updateKeyBar(); drawTimeline(); }, selKeyTimes: () => selKeys.map((s) => s.k.t),
       tlDebug: () => { const g = tlGeom(); return { rows: timelineRows(), left: TL.left, right: TL.right, w: g.w, span: g.span, t0: g.t0, z: tlView.z }; } };
     setTimeout(() => checkUpdates(false).catch(() => {}), 3000);
   }

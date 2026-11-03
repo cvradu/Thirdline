@@ -81,7 +81,8 @@ function buildMenu() {
     { label: 'Edit', submenu: [
       { label: 'Undo', accelerator: 'CmdOrCtrl+Z', click: send('undo') },
       { label: 'Redo', accelerator: 'Shift+CmdOrCtrl+Z', click: send('redo') },
-      { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' },
+      { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' },
+      { label: 'Duplicate', accelerator: 'CmdOrCtrl+D', click: send('duplicate') }, { role: 'selectAll' },
     ] },
     { label: 'View', submenu: [{ label: 'Reset Panel Layout', click: send('resetLayout') }, { type: 'separator' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { type: 'separator' }, { role: 'togglefullscreen' }, { role: 'toggleDevTools' }] },
     { role: 'windowMenu' },
