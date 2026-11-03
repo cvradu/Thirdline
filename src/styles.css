@@ -127,3 +127,9 @@ body.advanced .adv-toggle { border-color: var(--accent); color: var(--accent); }
 .swatches.recent { margin-top: 3px; padding-top: 3px; border-top: 1px dashed var(--line); }
 .row .ctl .unit { width: auto; min-width: 18px; }
 .keybar[hidden] { display: none; }
+
+.animator { border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; margin: 8px 0; background: #0e111780; }
+.animator-head { display: flex; justify-content: space-between; align-items: center; }
+.animator-head b { font-size: 12px; color: var(--accent); }
+.animator-head button { padding: 1px 7px; font-size: 11px; }
+.animator-sub { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #596176; margin: 8px 0 2px; }

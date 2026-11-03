@@ -312,7 +312,7 @@
         kf.classList.toggle('onkey', keyed && keyIndexAt(def.path, time) >= 0);
       };
     }
-    const entry = { sync, def, rowEl: r };
+    const entry = { sync, def, rowEl: r, owner: currentOwner };
     controls.push(entry);
     sync();
     return r;
@@ -320,7 +320,10 @@
   function section(title, rows, headerExtra) {
     return el('div', { class: 'section' }, el('h3', {}, title, headerExtra || null), ...rows);
   }
-  function syncControls() { for (const c of controls) c.sync(); }
+  let currentOwner = null;
+  const structureSyncs = [];
+  function syncControls() { for (const f of structureSyncs) f(); for (const c of controls) c.sync(); }
+  function dropControls(owner) { for (let i = controls.length - 1; i >= 0; i--) if (controls[i].owner === owner) controls.splice(i, 1); }
   function syncKeyable() { for (const c of controls) if (c.def.key) c.sync(); }
   function refreshVisibility() {
     for (const c of controls) if (c.def.show) c.rowEl.classList.toggle('hidden', !c.def.show(state));
@@ -698,8 +701,12 @@
       ] }),
     ].filter(Boolean));
     transformSec.classList.add('adv-only');
+    const maskSec = maskSection(key, name);
+    const animSec = isBd ? null : animatorsSection(key, name);
     return [
       transformSec,
+      maskSec,
+      animSec,
       section(`${name} · In`, [
         row({ label: 'Animation', type: 'select', path: `${base}.in.type`, options: opts }),
         row({ label: 'Start at', type: 'range', path: `${base}.in.delay`, min: 0, max: 10, step: 0.05, unit: 's' }),
@@ -729,6 +736,155 @@
         ] }),
       ]),
     ].filter(Boolean);
+  }
+
+  // ---------- Masks (Advanced) ----------
+  function maskSection(key, name) {
+    const mp = (k) => `${key}.mask.${k}`;
+    const on = (s) => s[key].mask.enabled;
+    const fitToLayer = () => {
+      const b = lastLayout && lastLayout.layers && lastLayout.layers[key];
+      if (!b) return toast('That layer is empty');
+      const pad = 8;
+      for (const [k, v] of Object.entries({ x: Math.round(b.x - pad), y: Math.round(b.y - pad), w: Math.round(b.w + pad * 2), h: Math.round(b.h + pad * 2) })) setValue(mp(k), v);
+      state[key].mask.enabled = true;
+      changed({ sync: true });
+    };
+    const revealPreset = (dir) => () => {
+      fitToLayer();
+      const m = state[key].mask;
+      const t0 = fpsT(time), t1 = fpsT(time + 0.6);
+      clearKeys(`${key}.mask.`);
+      if (dir === 'right') { state.keys[mp('w')] = [{ t: t0, v: 0, e: 'easeOutCubic' }, { t: t1, v: m.w, e: 'easeOutCubic' }]; }
+      else if (dir === 'up') { state.keys[mp('y')] = [{ t: t0, v: m.y + m.h, e: 'easeOutCubic' }, { t: t1, v: m.y, e: 'easeOutCubic' }]; state.keys[mp('h')] = [{ t: t0, v: 0, e: 'easeOutCubic' }, { t: t1, v: m.h, e: 'easeOutCubic' }]; }
+      else if (dir === 'iris') { m.shape = 'ellipse'; const cx = m.x + m.w / 2, cy = m.y + m.h / 2, W = m.w * 1.5, H = m.h * 3;
+        state.keys[mp('x')] = [{ t: t0, v: cx, e: 'easeOutCubic' }, { t: t1, v: cx - W / 2, e: 'easeOutCubic' }]; state.keys[mp('y')] = [{ t: t0, v: cy, e: 'easeOutCubic' }, { t: t1, v: cy - H / 2, e: 'easeOutCubic' }];
+        state.keys[mp('w')] = [{ t: t0, v: 0, e: 'easeOutCubic' }, { t: t1, v: W, e: 'easeOutCubic' }]; state.keys[mp('h')] = [{ t: t0, v: 0, e: 'easeOutCubic' }, { t: t1, v: H, e: 'easeOutCubic' }]; }
+      changed({ sync: true }); toast('Mask reveal keyframed from the playhead');
+    };
+    const sec = section(`${name} · Mask`, [
+      el('div', { class: 'sub' }, 'Only the part of the layer inside the mask is visible (or outside, when inverted). Keyframe its position and size to build custom reveals. The cyan outline shows the mask when the layer is selected.'),
+      row({ label: 'Mask', type: 'checkbox', path: mp('enabled'), text: 'Enable mask' }),
+      row({ label: 'Shape', type: 'select', path: mp('shape'), options: { rect: 'Rectangle', ellipse: 'Ellipse' }, show: on }),
+      row({ label: 'X', type: 'range', path: mp('x'), key: true, keyLabel: 'Mask X', min: -500, max: 4000, unit: 'px', show: on }),
+      row({ label: 'Y', type: 'range', path: mp('y'), key: true, keyLabel: 'Mask Y', min: -500, max: 2500, unit: 'px', show: on }),
+      row({ label: 'Width', type: 'range', path: mp('w'), key: true, keyLabel: 'Mask width', min: 0, max: 4000, unit: 'px', show: on }),
+      row({ label: 'Height', type: 'range', path: mp('h'), key: true, keyLabel: 'Mask height', min: 0, max: 2500, unit: 'px', show: on }),
+      row({ label: 'Corner radius', type: 'range', path: mp('radius'), key: true, keyLabel: 'Mask radius', min: 0, max: 400, unit: 'px', show: (s) => on(s) && s[key].mask.shape === 'rect' }),
+      row({ label: 'Feather', type: 'range', path: mp('feather'), key: true, keyLabel: 'Mask feather', min: 0, max: 120, unit: 'px', show: on }),
+      row({ label: 'Invert', type: 'checkbox', path: mp('invert'), text: 'Show outside the mask', show: on }),
+      row({ label: 'Quick', type: 'buttons', buttons: [
+        ['Fit to layer', fitToLayer, 'Set the mask to this layer’s current bounds'],
+        ['Wipe reveal →', revealPreset('right'), 'Keyframe a left-to-right reveal starting at the playhead'],
+        ['Rise reveal ↑', revealPreset('up'), 'Keyframe a bottom-to-top reveal starting at the playhead'],
+        ['Iris reveal ◯', revealPreset('iris'), 'Keyframe an expanding ellipse starting at the playhead'],
+      ] }),
+    ]);
+    sec.classList.add('adv-only');
+    return sec;
+  }
+
+  // ---------- Text animators (Advanced, After Effects style) ----------
+  const ANIMATOR_PRESETS = {
+    blank: { label: 'Blank animator', props: {}, sel: { shape: 'square', start: 0, end: 100, offset: 0 } },
+    fade: { label: 'Fade in letters', props: { opacity: 0 }, reveal: true },
+    rise: { label: 'Rise in letters', props: { y: 60, opacity: 0 }, reveal: true },
+    drop: { label: 'Drop in letters', props: { y: -60, opacity: 0, rotation: -12 }, reveal: true },
+    pop: { label: 'Pop in letters', props: { scale: 0, opacity: 0 }, reveal: true, ease: 'easeOutBack' },
+    blurWords: { label: 'Blur in words', props: { blur: 20, opacity: 0 }, reveal: true, unit: 'words' },
+    tracking: { label: 'Tracking in', props: { tracking: 30, opacity: 0 }, reveal: true },
+    sweep: { label: 'Colour sweep (highlight)', props: { colorOn: true, color: '#f59e0b' }, sweep: true },
+    wave: { label: 'Wave', props: { y: -24 }, sweep: true, shape: 'smooth' },
+  };
+  function makeAnimator(key, presetKey) {
+    const pr = ANIMATOR_PRESETS[presetKey];
+    const a = {
+      name: pr.label, enabled: true, unit: pr.unit || 'chars', shape: pr.shape || (pr.reveal ? 'rampUp' : pr.sweep ? 'triangle' : 'square'),
+      start: 0, end: pr.reveal ? 40 : pr.sweep ? 30 : 100, offset: 0, amount: 100,
+      props: { x: 0, y: 0, scale: 100, rotation: 0, opacity: 100, blur: 0, tracking: 0, colorOn: false, color: '#f59e0b', ...pr.props },
+    };
+    const list = state[key].animators;
+    list.push(a);
+    const i = list.length - 1;
+    const path = `${key}.animators.${i}.offset`;
+    const t0 = fpsT(time);
+    if (pr.reveal) {
+      state.keys[path] = [{ t: t0, v: -40, e: pr.ease || 'easeInOutCubic' }, { t: fpsT(time + 1), v: 100, e: 'linear' }];
+      a.offset = -40;
+      if (state[key].anim.in.type !== 'none') { state[key].anim.in.type = 'none'; toast(`${LAYER_NAMES[key]} “In” animation set to None so the animator drives the reveal`); }
+      state[key].anim.in.delay = Math.min(state[key].anim.in.delay, t0);
+    } else if (pr.sweep) {
+      state.keys[path] = [{ t: t0, v: -30, e: 'linear' }, { t: fpsT(time + 1.2), v: 100, e: 'linear' }];
+      a.offset = -30;
+    }
+  }
+  function removeAnimator(key, i) {
+    const list = state[key].animators;
+    list.splice(i, 1);
+    // Drop this animator's keyframes and renumber the ones after it.
+    const pre = `${key}.animators.`;
+    const next = {};
+    for (const [p, ks] of Object.entries(state.keys || {})) {
+      if (!p.startsWith(pre)) { next[p] = ks; continue; }
+      const [idx, ...rest] = p.slice(pre.length).split('.');
+      const n = +idx;
+      if (n === i) continue;
+      next[n > i ? `${pre}${n - 1}.${rest.join('.')}` : p] = ks;
+    }
+    state.keys = next;
+    selKey = null;
+  }
+  function animatorsSection(key, name) {
+    const owner = `animators-${key}`;
+    const list = el('div');
+    const add = el('select');
+    fillSelect(add, [['', '+ Add animator…'], ...Object.entries(ANIMATOR_PRESETS).map(([k, v]) => [k, v.label])]);
+    add.addEventListener('change', () => { if (!add.value) return; makeAnimator(key, add.value); add.value = ''; changed({ sync: true }); });
+    let built = -1;
+    function build() {
+      dropControls(owner);
+      list.innerHTML = '';
+      currentOwner = owner;
+      state[key].animators.forEach((a, i) => {
+        const ap = (k) => `${key}.animators.${i}.${k}`;
+        const box = el('div', { class: 'animator' },
+          el('div', { class: 'animator-head' },
+            el('b', {}, a.name || `Animator ${i + 1}`),
+            el('button', { type: 'button', title: 'Delete this animator', onclick: () => { removeAnimator(key, i); changed({ sync: true }); } }, '✕')),
+          row({ label: 'Enabled', type: 'checkbox', path: ap('enabled'), text: 'On' }),
+          el('div', { class: 'animator-sub' }, 'Range selector'),
+          row({ label: 'Based on', type: 'select', path: ap('unit'), options: { chars: 'Characters', words: 'Words' } }),
+          row({ label: 'Shape', type: 'select', path: ap('shape'), options: { square: 'Square', rampUp: 'Ramp up', rampDown: 'Ramp down', triangle: 'Triangle', round: 'Round', smooth: 'Smooth' } }),
+          row({ label: 'Start', type: 'range', path: ap('start'), key: true, keyLabel: `Animator ${i + 1} start`, min: 0, max: 100, step: 0.5, unit: '%' }),
+          row({ label: 'End', type: 'range', path: ap('end'), key: true, keyLabel: `Animator ${i + 1} end`, min: 0, max: 100, step: 0.5, unit: '%' }),
+          row({ label: 'Offset', type: 'range', path: ap('offset'), key: true, keyLabel: `Animator ${i + 1} offset`, min: -100, max: 100, step: 0.5, unit: '%' }),
+          row({ label: 'Amount', type: 'range', path: ap('amount'), key: true, keyLabel: `Animator ${i + 1} amount`, min: 0, max: 100, unit: '%' }),
+          el('div', { class: 'animator-sub' }, 'Properties (applied fully where the selector is 100%)'),
+          row({ label: 'Position X', type: 'range', path: ap('props.x'), key: true, keyLabel: `Animator ${i + 1} X`, min: -400, max: 400, unit: 'px' }),
+          row({ label: 'Position Y', type: 'range', path: ap('props.y'), key: true, keyLabel: `Animator ${i + 1} Y`, min: -400, max: 400, unit: 'px' }),
+          row({ label: 'Scale', type: 'range', path: ap('props.scale'), key: true, keyLabel: `Animator ${i + 1} scale`, min: 0, max: 400, unit: '%' }),
+          row({ label: 'Rotation', type: 'range', path: ap('props.rotation'), key: true, keyLabel: `Animator ${i + 1} rotation`, min: -360, max: 360, unit: '°' }),
+          row({ label: 'Opacity', type: 'range', path: ap('props.opacity'), key: true, keyLabel: `Animator ${i + 1} opacity`, min: 0, max: 100, unit: '%' }),
+          row({ label: 'Blur', type: 'range', path: ap('props.blur'), key: true, keyLabel: `Animator ${i + 1} blur`, min: 0, max: 60, unit: 'px' }),
+          row({ label: 'Tracking', type: 'range', path: ap('props.tracking'), key: true, keyLabel: `Animator ${i + 1} tracking`, min: -40, max: 120, step: 0.5, unit: 'px' }),
+          row({ label: 'Fill colour', type: 'checkbox', path: ap('props.colorOn'), text: 'Change colour' }),
+          row({ label: 'Colour', type: 'color', path: ap('props.color'), key: true, keyLabel: `Animator ${i + 1} colour`, show: (s) => s[key].animators[i] && s[key].animators[i].props.colorOn }),
+        );
+        list.append(box);
+      });
+      currentOwner = null;
+      built = state[key].animators.length;
+      refreshVisibility();
+    }
+    structureSyncs.push(() => { if (built !== state[key].animators.length) build(); });
+    const sec = section(`${name} · Text animators`, [
+      el('div', { class: 'sub' }, 'Like After Effects: each animator changes letters by a property amount, limited by a range selector. Keyframe Start / End / Offset to sweep the effect across the text. Presets add keyframes at the playhead.'),
+      el('div', { class: 'ctl' }, add),
+      list,
+    ]);
+    sec.classList.add('adv-only');
+    build();
+    return sec;
   }
 
   // ---------- Tabs ----------
@@ -882,6 +1038,7 @@
   const keysTop = () => TL.ruler + 6 + TRACKS.length * TL.rowH + 6;
   function resizeTimeline() {
     const rows = keyRows().length;
+    TL.left = rows ? 150 : 86;
     const hgt = 120 + (rows ? rows * TL.keyH + 4 : 0);
     if (tl.style.height !== `${hgt}px`) { tl.style.height = `${hgt}px`; tl.width = 0; }
     drawTimeline();

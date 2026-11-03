@@ -14,6 +14,8 @@ A desktop app for designing animated lower thirds and exporting them with a tran
 - **Texture overlay:** upload an image (or use a built-in grain/paper/halftone/scanline/stripe/metal texture) and blend it onto the backdrop with 14 blend modes; it is clipped to the backdrop's shape and can drift over time.
 - **Colours:** every colour has a picker, hex field, swatches, recently used colours and a screen eyedropper.
 - **Advanced mode:** keyframe position, scale, rotation, opacity, blur and tracking per layer, plus most style values (size, colours, padding, gradient settings…). Keyframes appear on the timeline where you can drag them, change their easing or delete them (J/K jump between keyframes).
+- **Masks:** per-layer rectangle/ellipse masks with feather, rounded corners and invert; keyframe them or use the quick wipe/rise/iris reveal presets.
+- **Text animators:** After Effects-style animators on the title and subtitle. A range selector (start / end / offset / amount, by characters or words, with square/ramp/triangle/round/smooth shapes) drives position, scale, rotation, opacity, blur, tracking and fill colour per letter. Presets (fade, rise, drop, pop, blur words, tracking, colour sweep, wave) add the keyframes for you.
 - **Motion blur:** shutter angle and quality settings; rendered with floating-point accumulation on export, optional preview.
 - **Presets / styles:** 7 built-in styles, save your own, import/share preset files. Undo/redo and autosave.
 - **Export (ffmpeg is bundled):** MOV ProRes 4444 with alpha, WebM VP9 with alpha, PNG sequence with alpha, MP4 H.264 over a solid colour.
