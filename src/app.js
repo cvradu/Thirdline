@@ -1378,14 +1378,18 @@
     $('#kbEase').title = last ? 'Last keyframe: nothing to ease into' : 'How the value moves from this keyframe to the next';
   }
   fillSelect($('#kbEase'), [['easeInOutCubic', 'Easy ease'], ['linear', 'Linear'], ['easeOutCubic', 'Ease out'], ['easeInCubic', 'Ease in'], ['hold', 'Hold (jump)'],
-    { group: 'More', items: Object.entries(EASING_LABELS).filter(([k]) => k !== 'custom' && !['linear', 'easeOutCubic', 'easeInCubic', 'easeInOutCubic'].includes(k)) }]);
+    { group: 'More', items: Object.entries(EASING_LABELS).filter(([k]) => k !== 'custom' && !['linear', 'easeOutCubic', 'easeInCubic', 'easeInOutCubic'].includes(k)) }, ['custom', 'Custom curve (graph)']]);
   fillSelect($('#kpEase'), EASING_LABELS);
   $('#kbValue').addEventListener('input', (e) => {
     if (!selKey) return;
     selKey.k.v = e.target.type === 'color' ? e.target.value : +e.target.value;
     changed({ sync: true });
   });
-  $('#kbEase').addEventListener('change', (e) => { if (selKey) { selKey.k.e = e.target.value; changed(); updateKeyBar(); drawTimeline(); } });
+  $('#kbEase').addEventListener('change', (e) => {
+    if (!selKey) return;
+    if (e.target.value === 'custom') return openGraph({ kind: 'key', ...selKey });
+    selKey.k.e = e.target.value; changed(); updateKeyBar(); drawTimeline();
+  });
   $('#kbDelete').onclick = () => {
     if (selPreset) return deletePreset(selPreset.key, selPreset.dir);
     if (selKey) { removeKey(selKey.path, selKey.k); changed({ sync: true }); updateKeyBar(); }
@@ -1396,7 +1400,7 @@
     state[selPreset.key].anim[selPreset.dir].duration = Math.max(0.05, Math.min(state.comp.duration, +e.target.value));
     changed({ sync: true });
   });
-  $('#kpEase').addEventListener('change', (e) => { if (selPreset) { state[selPreset.key].anim[selPreset.dir].easing = e.target.value; changed({ sync: true }); } });
+  $('#kpEase').addEventListener('change', (e) => { if (selPreset && e.target.value === 'custom') return openGraph({ kind: 'preset', ...selPreset }); if (selPreset) { state[selPreset.key].anim[selPreset.dir].easing = e.target.value; changed({ sync: true }); } });
   $('#kpConvert').onclick = () => { if (selPreset) convertPreset(selPreset.key, selPreset.dir); };
   $('#kbPrev').onclick = () => jumpKey(-1);
   $('#kbNext').onclick = () => jumpKey(1);
@@ -1411,6 +1415,240 @@
     const t = dir > 0 ? all.find((x) => x > time + 1e-4) : [...all].reverse().find((x) => x < time - 1e-4);
     if (t !== undefined) { setPlaying(false); setTime(t); }
   }
+  // ---------- Easing: right-click menu and graph editor ----------
+  // Cubic-bezier equivalents of the named easings, so the graph editor can start from the current curve.
+  const EASE_BEZIER = {
+    linear: [0, 0, 1, 1], easeInQuad: [0.11, 0, 0.5, 0], easeOutQuad: [0.5, 1, 0.89, 1], easeInOutQuad: [0.45, 0, 0.55, 1],
+    easeInCubic: [0.32, 0, 0.67, 0], easeOutCubic: [0.33, 1, 0.68, 1], easeInOutCubic: [0.65, 0, 0.35, 1],
+    easeInQuart: [0.5, 0, 0.75, 0], easeOutQuart: [0.25, 1, 0.5, 1], easeInOutQuart: [0.76, 0, 0.24, 1],
+    easeInExpo: [0.7, 0, 0.84, 0], easeOutExpo: [0.16, 1, 0.3, 1], easeInOutExpo: [0.87, 0, 0.13, 1],
+    easeInBack: [0.36, 0, 0.66, -0.56], easeOutBack: [0.34, 1.56, 0.64, 1], easeInOutBack: [0.68, -0.6, 0.32, 1.6],
+  };
+  const MENU_EASES = [['easeInOutCubic', 'Easy ease'], ['linear', 'Linear'], ['easeInCubic', 'Ease in (slow start)'], ['easeOutCubic', 'Ease out (slow end)'],
+    ['easeOutBack', 'Overshoot'], ['easeInBack', 'Anticipate'], ['easeOutElastic', 'Elastic'], ['easeOutBounce', 'Bounce'], ['easeOutExpo', 'Fast then settle']];
+  // An easing target is one curve: a keyframe segment (key a → next key) or a preset in/out animation.
+  // For the last keyframe of a property there is no outgoing segment, so the incoming one is used.
+  function easeTarget(hit) {
+    if (hit.kind === 'preset') {
+      const A = state[hit.key].anim[hit.dir];
+      const sp = Engine.timingSpans(state[hit.key].anim, state.comp.duration);
+      const [t0, t1] = hit.dir === 'in' ? [sp.inStart, sp.inEnd] : [sp.outStart, sp.outEnd];
+      return {
+        ...hit, t0, t1, va: hit.dir === 'in' ? 0 : 100, vb: hit.dir === 'in' ? 100 : 0, unit: '% shown',
+        title: `${LAYER_NAMES[hit.key]} · ${hit.dir === 'in' ? 'In' : 'Out'} (${animLabel(hit.key, hit.dir)})`,
+        get e() { return A.easing; }, get bez() { return A.bezier; },
+        set(e, bez) { A.easing = e; if (bez) A.bezier = bez; },
+      };
+    }
+    const ks = keysOf(hit.path); let i = ks.indexOf(hit.k);
+    if (i === ks.length - 1 && i > 0) i--;
+    const a = ks[i], b = ks[i + 1] || a;
+    return {
+      ...hit, a, t0: a.t, t1: b.t, va: a.v, vb: b.v, unit: '', title: keyLabel(hit.path),
+      get e() { return a.e || 'easeInOutCubic'; }, get bez() { return a.bezier; },
+      set(e, bez) { a.e = e; if (bez) a.bezier = bez; else delete a.bezier; },
+    };
+  }
+  // What's under the mouse on the timeline: a keyframe, or a preset animation (its ◆ or its ramp).
+  function timelineHit(mx, my) {
+    const { sx } = tlGeom();
+    const row = rowAt(timelineRows(), my);
+    if (!row || mx < TL.left) return null;
+    if (row.type === 'key') {
+      let best = null, bd = 7;
+      for (const k of state.keys[row.path]) { const d = Math.abs(sx(k.t) - mx); if (d < bd) { bd = d; best = k; } }
+      return best ? { kind: 'key', path: row.path, k: best } : null;
+    }
+    if (row.type === 'bar') {
+      const a = state[row.key].anim, sp = Engine.timingSpans(a, state.comp.duration);
+      const m = barHit(mx, sx(sp.inStart), sx(sp.inEnd), sx(sp.outStart), sx(sp.outEnd), a);
+      const dir = m === 'in' || m === 'inDur' ? 'in' : m === 'out' || m === 'outDur' ? 'out' : null;
+      return dir && a[dir].type !== 'none' ? { kind: 'preset', key: row.key, dir } : null;
+    }
+    return null;
+  }
+  function selectHit(hit) {
+    if (hit.kind === 'key') { selKey = { path: hit.path, k: hit.k }; selPreset = null; }
+    else { selPreset = { key: hit.key, dir: hit.dir }; selKey = null; }
+    const layer = hit.kind === 'key' ? hit.path.split('.')[0] : hit.key;
+    if (TRACK_COLOR[layer] && selected !== layer) selectLayer(layer);
+    updateKeyBar(); drawTimeline();
+  }
+
+  // Right-click menu
+  const ctxMenu = el('div', { class: 'ctxmenu', hidden: '' });
+  document.body.append(ctxMenu);
+  const closeMenu = () => { ctxMenu.hidden = true; };
+  function openMenu(x, y, hit) {
+    const T = easeTarget(hit);
+    ctxMenu.innerHTML = '';
+    ctxMenu.append(el('div', { class: 'ctx-title' }, T.title));
+    const item = (label, fn, { on = false, disabled = false } = {}) => {
+      const b = el('button', { class: on ? 'on' : '' }, label);
+      b.disabled = disabled;
+      b.onclick = () => { closeMenu(); fn(); };
+      ctxMenu.append(b);
+    };
+    const sep = () => ctxMenu.append(el('hr'));
+    ctxMenu.append(el('div', { class: 'ctx-sub' }, 'Easing'));
+    for (const [e, label] of MENU_EASES) item(label, () => { T.set(e); changed({ sync: true }); }, { on: T.e === e });
+    if (hit.kind === 'key') item('Hold (jump)', () => { T.set('hold'); changed({ sync: true }); }, { on: T.e === 'hold' });
+    if (T.e === 'custom') item('Custom curve', () => openGraph(hit), { on: true });
+    sep();
+    item('Edit curve in graph editor…', () => openGraph(hit));
+    if (hit.kind === 'preset') item('Convert to keyframes', () => convertPreset(hit.key, hit.dir), { disabled: !CONVERTIBLE[state[hit.key].anim[hit.dir].type] });
+    item(hit.kind === 'key' ? 'Delete keyframe' : 'Remove animation', () => {
+      if (hit.kind === 'key') { removeKey(hit.path, hit.k); changed({ sync: true }); updateKeyBar(); } else deletePreset(hit.key, hit.dir);
+    });
+    ctxMenu.hidden = false;
+    const r = ctxMenu.getBoundingClientRect();
+    ctxMenu.style.left = `${Math.min(x, innerWidth - r.width - 6)}px`;
+    ctxMenu.style.top = `${Math.max(6, Math.min(y, innerHeight - r.height - 6))}px`;
+  }
+  tl.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    if (!advanced) return;
+    const r = tl.getBoundingClientRect();
+    const hit = timelineHit(e.clientX - r.left, e.clientY - r.top);
+    if (!hit) return closeMenu();
+    selectHit(hit);
+    openMenu(e.clientX, e.clientY, hit);
+  });
+  tl.addEventListener('dblclick', (e) => {
+    if (!advanced) return;
+    const r = tl.getBoundingClientRect();
+    const hit = timelineHit(e.clientX - r.left, e.clientY - r.top);
+    if (hit) { tlDrag = null; selectHit(hit); openGraph(hit); }
+  });
+  document.addEventListener('pointerdown', (e) => { if (!ctxMenu.hidden && !ctxMenu.contains(e.target)) closeMenu(); }, true);
+  window.addEventListener('blur', closeMenu);
+
+  // Graph editor (value graph with draggable bezier handles, like After Effects' graph editor)
+  const gDlg = $('#graphDialog'), gCv = $('#graphCanvas');
+  let gHit = null, gDrag = null;
+  const gT = () => (gHit ? easeTarget(gHit) : null);
+  const currentBez = (T) => (T.e === 'custom' && T.bez?.length === 4 ? T.bez : EASE_BEZIER[T.e]);
+  function openGraph(hit) {
+    gHit = hit; closeMenu();
+    const sel = $('#gEase');
+    fillSelect(sel, [...Object.entries(EASING_LABELS).filter(([k]) => k !== 'custom'), ['custom', 'Custom curve'], ...(hit.kind === 'key' ? [['hold', 'Hold (jump)']] : [])]);
+    if (!gDlg.open) gDlg.showModal();
+    syncGraph();
+  }
+  function syncGraph() {
+    const T = gT(); if (!T) return;
+    $('#gTitle').textContent = T.title;
+    $('#gEase').value = T.e;
+    const bz = currentBez(T);
+    ['gX1', 'gY1', 'gX2', 'gY2'].forEach((id, i) => { const n = $('#' + id); n.disabled = !bz; if (document.activeElement !== n) n.value = bz ? +bz[i].toFixed(3) : ''; });
+    $('#gNote').textContent = !bz ? (T.e === 'hold' ? 'Hold: the value jumps at the next keyframe.' : 'This easing isn’t a simple curve. Drag a handle to replace it with a custom curve.')
+      : 'Drag the yellow handles. Steeper = faster. Pull a handle above or below the box to overshoot.';
+    drawGraph();
+  }
+  function graphGeom() {
+    const dpr = window.devicePixelRatio || 1, w = gCv.clientWidth, h = gCv.clientHeight;
+    if (gCv.width !== Math.round(w * dpr)) { gCv.width = Math.round(w * dpr); gCv.height = Math.round(h * dpr); }
+    const T = gT(), fn = T.e === 'hold' ? (x) => (x < 1 ? 0 : 1) : getEasing(T.e, T.bez);
+    const bz = currentBez(T);
+    let lo = 0, hi = 1;
+    for (let i = 0; i <= 100; i++) { const v = fn(i / 100); lo = Math.min(lo, v); hi = Math.max(hi, v); }
+    if (bz) { lo = Math.min(lo, bz[1], bz[3]); hi = Math.max(hi, bz[1], bz[3]); }
+    lo = Math.max(-1.5, lo) - 0.12; hi = Math.min(2.5, hi) + 0.12;
+    const P = { l: 64, r: 20, t: 16, b: 30 };
+    const X = (x) => P.l + x * (w - P.l - P.r), Y = (y) => P.t + (1 - (y - lo) / (hi - lo)) * (h - P.t - P.b);
+    const iX = (px) => (px - P.l) / (w - P.l - P.r), iY = (py) => lo + (1 - (py - P.t) / (h - P.t - P.b)) * (hi - lo);
+    return { dpr, w, h, T, fn, bz, lo, hi, X, Y, iX, iY };
+  }
+  function fmtVal(T, n) {
+    if (typeof T.va !== 'number' || typeof T.vb !== 'number') return `${Math.round(n * 100)}%`;
+    const v = T.va + (T.vb - T.va) * n;
+    return `${+v.toFixed(Math.abs(v) < 10 ? 2 : 0)}${T.unit ? '%' : ''}`;
+  }
+  function drawGraph() {
+    if (!gDlg.open) return;
+    const { dpr, w, h, T, fn, bz, lo, hi, X, Y } = graphGeom();
+    const g = gCv.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
+    g.fillStyle = '#0e1117'; g.fillRect(0, 0, w, h);
+    g.font = '10px ui-monospace, monospace'; g.lineWidth = 1;
+    // grid: value lines at start (0) / end (1) values and quarters; time at quarters
+    for (let q = 0; q <= 4; q++) {
+      const x = X(q / 4);
+      g.strokeStyle = '#262b37'; g.beginPath(); g.moveTo(x, Y(hi)); g.lineTo(x, Y(lo)); g.stroke();
+      g.fillStyle = '#596176'; g.fillText(`${(T.t0 + (T.t1 - T.t0) * q / 4).toFixed(2)}s`, x - 14, h - 10);
+    }
+    for (const n of [0, 0.25, 0.5, 0.75, 1]) {
+      const y = Y(n);
+      g.strokeStyle = n === 0 || n === 1 ? '#3a4152' : '#20242e'; g.beginPath(); g.moveTo(X(0), y); g.lineTo(X(1), y); g.stroke();
+      g.fillStyle = '#8a93a6'; g.textAlign = 'right'; g.fillText(fmtVal(T, n), X(0) - 6, y + 3); g.textAlign = 'left';
+    }
+    // speed graph (faint), scaled to fit
+    const sp = []; let smax = 1e-6;
+    for (let i = 0; i <= 120; i++) { const x = i / 120, xa = Math.max(0, x - 0.004), xb = Math.min(1, x + 0.004), d = Math.abs(fn(xb) - fn(xa)) / (xb - xa); sp.push(d); smax = Math.max(smax, d); }
+    g.strokeStyle = '#3b82f680'; g.beginPath();
+    sp.forEach((d, i) => { const x = X(i / 120), y = Y(lo) - (d / smax) * (Y(lo) - Y(hi)) * 0.35; i ? g.lineTo(x, y) : g.moveTo(x, y); });
+    g.stroke();
+    g.fillStyle = '#3b82f6aa'; g.fillText('speed', X(1) - 34, Y(lo) - 4);
+    // playhead
+    if (time >= T.t0 && time <= T.t1 && T.t1 > T.t0) { const x = X((time - T.t0) / (T.t1 - T.t0)); g.strokeStyle = '#ffffff60'; g.beginPath(); g.moveTo(x, Y(hi)); g.lineTo(x, Y(lo)); g.stroke(); }
+    // value curve
+    g.strokeStyle = '#f8fafc'; g.lineWidth = 2.5; g.beginPath();
+    for (let i = 0; i <= 200; i++) { const x = i / 200, y = fn(x); i ? g.lineTo(X(x), Y(y)) : g.moveTo(X(x), Y(y)); }
+    g.stroke(); g.lineWidth = 1;
+    // handles
+    const ends = [[0, 0], [1, 1]];
+    const hs = bz ? [[bz[0], bz[1]], [bz[2], bz[3]]] : [[0.33, 0], [0.67, 1]];
+    g.globalAlpha = bz ? 1 : 0.4;
+    hs.forEach(([hx, hy], i) => {
+      g.strokeStyle = '#f59e0b'; g.beginPath(); g.moveTo(X(ends[i][0]), Y(ends[i][1])); g.lineTo(X(hx), Y(hy)); g.stroke();
+      g.fillStyle = '#f59e0b'; g.beginPath(); g.arc(X(hx), Y(hy), 7, 0, Math.PI * 2); g.fill();
+    });
+    g.globalAlpha = 1;
+    g.fillStyle = '#e5e7eb';
+    for (const [ex, ey] of ends) { const s = 5; g.beginPath(); g.moveTo(X(ex), Y(ey) - s); g.lineTo(X(ex) + s, Y(ey)); g.lineTo(X(ex), Y(ey) + s); g.lineTo(X(ex) - s, Y(ey)); g.fill(); }
+  }
+  gCv.addEventListener('pointerdown', (e) => {
+    const { X, Y, bz } = graphGeom(); const r = gCv.getBoundingClientRect();
+    const mx = e.clientX - r.left, my = e.clientY - r.top;
+    const hs = bz ? [[bz[0], bz[1]], [bz[2], bz[3]]] : [[0.33, 0], [0.67, 1]];
+    let best = -1, bd = 14;
+    hs.forEach(([hx, hy], i) => { const d = Math.hypot(X(hx) - mx, Y(hy) - my); if (d < bd) { bd = d; best = i; } });
+    if (best < 0) return;
+    // freeze the vertical scale while dragging so the handle tracks the mouse
+    const geo = graphGeom();
+    gDrag = { i: best, bz: [...hs.flat()], iX: geo.iX, iY: geo.iY };
+    gCv.setPointerCapture(e.pointerId);
+  });
+  gCv.addEventListener('pointermove', (e) => {
+    const r = gCv.getBoundingClientRect();
+    if (!gDrag) {
+      const { X, Y, bz } = graphGeom();
+      const hs = bz ? [[bz[0], bz[1]], [bz[2], bz[3]]] : [[0.33, 0], [0.67, 1]];
+      gCv.style.cursor = hs.some(([hx, hy]) => Math.hypot(X(hx) - (e.clientX - r.left), Y(hy) - (e.clientY - r.top)) < 14) ? 'grab' : 'default';
+      return;
+    }
+    const x = Math.max(0, Math.min(1, gDrag.iX(e.clientX - r.left)));
+    const y = Math.max(-1.5, Math.min(2.5, gDrag.iY(e.clientY - r.top)));
+    const b = gDrag.bz; b[gDrag.i * 2] = +x.toFixed(3); b[gDrag.i * 2 + 1] = +y.toFixed(3);
+    gT().set('custom', [...b]);
+    changed();
+    syncGraph();
+  });
+  gCv.addEventListener('pointerup', () => { if (gDrag) { gDrag = null; changed({ sync: true }); } });
+  $('#gEase').addEventListener('change', (e) => {
+    const T = gT(); const v = e.target.value;
+    if (v === 'custom') T.set('custom', [...(currentBez(T) || [0.25, 0.1, 0.25, 1])]); else T.set(v);
+    changed({ sync: true }); syncGraph();
+  });
+  ['gX1', 'gY1', 'gX2', 'gY2'].forEach((id, i) => $('#' + id).addEventListener('input', (e) => {
+    const T = gT(); const b = [...(currentBez(T) || [0.25, 0.1, 0.25, 1])];
+    if (!Number.isFinite(+e.target.value) || e.target.value === '') return;
+    b[i] = i % 2 === 0 ? Math.max(0, Math.min(1, +e.target.value)) : +e.target.value;
+    T.set('custom', b); changed(); drawGraph();
+  }));
+  $('#gPlay').onclick = () => { const T = gT(); if (T) { setTime(Math.max(0, T.t0 - 0.2)); setPlaying(true); } };
+  $('#gClose').onclick = () => gDlg.close();
+  gDlg.addEventListener('close', () => { gHit = null; gDrag = null; changed({ sync: true }); });
+  $('#kbGraph').onclick = () => { if (selPreset) openGraph({ kind: 'preset', ...selPreset }); else if (selKey) openGraph({ kind: 'key', ...selKey }); };
   $('#optAdvanced').addEventListener('change', (e) => setAdvanced(e.target.checked));
 
   // ---------- Transport ----------
@@ -1669,7 +1907,8 @@
       if (k === 'o') { e.preventDefault(); openProject(); return; }
       if (k === 'e') { e.preventDefault(); $('#btnExport').click(); return; }
     }
-    if (typing || dlg.open) return;
+    if (e.key === 'Escape' && !ctxMenu.hidden) { closeMenu(); return; }
+    if (typing || dlg.open || gDlg.open) return;
     if (e.code === 'Space') { e.preventDefault(); setPlaying(!playing); }
     else if (e.key === 'ArrowLeft') $('#btnPrevFrame').click();
     else if (e.key === 'ArrowRight') $('#btnNextFrame').click();
