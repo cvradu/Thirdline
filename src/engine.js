@@ -286,10 +286,17 @@
   }
 
   // ---------- Layer transform (Advanced) ----------
-  const NO_TR = { x: 0, y: 0, scale: 100, rotation: 0, opacity: 100, blur: 0, tracking: 0 };
+  const NO_TR = { x: 0, y: 0, scale: 100, rotation: 0, opacity: 100, blur: 0, tracking: 0, anchorX: 50, anchorY: 50 };
   let layerBlur = 0;
-  function applyLayerTransform(ctx, tr, cx, cy, withAlpha = true) {
+  // Anchor point: where the layer scales and rotates from, in % of its box (50/50 = centre).
+  function pivotOf(tr, b) {
+    const ax = tr && tr.anchorX != null ? tr.anchorX : 50, ay = tr && tr.anchorY != null ? tr.anchorY : 50;
+    return [b.x + (b.w * ax) / 100, b.y + (b.h * ay) / 100];
+  }
+  const anchored = (tr) => !!tr && ((tr.anchorX != null && tr.anchorX !== 50) || (tr.anchorY != null && tr.anchorY !== 50));
+  function applyLayerTransform(ctx, tr, b, withAlpha = true) {
     if (!tr) return;
+    const [cx, cy] = pivotOf(tr, b);
     if (tr.x || tr.y) ctx.translate(tr.x || 0, tr.y || 0);
     const sc = (tr.scale ?? 100) / 100, sx = sc * ((tr.scaleX ?? 100) / 100), sy = sc * ((tr.scaleY ?? 100) / 100);
     if (tr.rotation || sx !== 1 || sy !== 1) {
@@ -301,6 +308,48 @@
     if (withAlpha && (tr.opacity ?? 100) < 100) ctx.globalAlpha *= clamp((tr.opacity ?? 100) / 100);
   }
   const blurFilter = (b) => (b > 0.05 ? `blur(${b.toFixed(2)}px)` : 'none');
+
+  // ---------- Parenting ----------
+  // A layer can follow another layer's transform (position, rotation, scale around its anchor),
+  // like After Effects parenting. Opacity, blur and the parent's in/out animation are not inherited.
+  function parentChain(state, id) {
+    const out = [], seen = new Set([id]);
+    let p = (getLayer(state, id) || {}).parent;
+    while (p && !seen.has(p) && getLayer(state, p)) { out.unshift(p); seen.add(p); p = getLayer(state, p).parent; }
+    return out; // root first
+  }
+  // The box a layer's transform pivots on, as drawn.
+  function drawBox(state, L, id) {
+    if (id === 'backdrop') return L.box;
+    if (id === 'title' || id === 'subtitle') { const l = L[id]; return { x: l.x, y: l.top, w: l.width, h: (l.bottom - l.top) || state[id].size }; }
+    return (L.extras || {})[id] || null;
+  }
+  function parentFrames(state, L, id) {
+    const out = [];
+    for (const p of parentChain(state, id)) { const b = drawBox(state, L, p); if (b) out.push({ tr: { ...NO_TR, ...(getLayer(state, p).transform || {}) }, b }); }
+    return out;
+  }
+  function applyParents(ctx, state, L, id) { for (const f of parentFrames(state, L, id)) applyLayerTransform(ctx, f.tr, f.b, false); }
+  // Point through one transform (forward) and back (inverse).
+  function fwdPt(tr, b, x, y) {
+    const [cx, cy] = pivotOf(tr, b);
+    const sc = (tr.scale ?? 100) / 100;
+    let dx = (x - cx) * sc * ((tr.scaleX ?? 100) / 100), dy = (y - cy) * sc * ((tr.scaleY ?? 100) / 100);
+    const a = ((tr.rotation || 0) * Math.PI) / 180;
+    [dx, dy] = [dx * Math.cos(a) - dy * Math.sin(a), dx * Math.sin(a) + dy * Math.cos(a)];
+    return [dx + cx + (tr.x || 0), dy + cy + (tr.y || 0)];
+  }
+  function invPt(tr, b, x, y) {
+    const [cx, cy] = pivotOf(tr, b);
+    let px = x - (tr.x || 0) - cx, py = y - (tr.y || 0) - cy;
+    const a = -((tr.rotation || 0) * Math.PI) / 180;
+    [px, py] = [px * Math.cos(a) - py * Math.sin(a), px * Math.sin(a) + py * Math.cos(a)];
+    const sc = (tr.scale ?? 100) / 100 || 1e-4;
+    return [px / (sc * ((tr.scaleX ?? 100) / 100) || 1e-4) + cx, py / (sc * ((tr.scaleY ?? 100) / 100) || 1e-4) + cy];
+  }
+  // Comp point → the space a layer's own transform lives in (undoing its parents).
+  function toParentSpace(frames, x, y) { for (const f of frames || []) [x, y] = invPt(f.tr, f.b, x, y); return [x, y]; }
+  function fromParentSpace(frames, x, y) { const fr = frames || []; for (let i = fr.length - 1; i >= 0; i--) [x, y] = fwdPt(fr[i].tr, fr[i].b, x, y); return [x, y]; }
 
   // ---------- Text animator range selector (After Effects style) ----------
   function selectorAmount(a, i, n) {
@@ -329,9 +378,10 @@
 
   // ---------- Generic element transform from animation ----------
   // b = element bounds. Returns parameters to apply around the element draw.
-  function animParams(type, p, b, dist) {
+  // pivot: the layer's anchor point; scale / pop / grow-from-centre / flip animate around it.
+  function animParams(type, p, b, dist, pivot) {
     const q = 1 - p;
-    const r = { dx: 0, dy: 0, sx: 1, sy: 1, ox: b.x + b.w / 2, oy: b.y + b.h / 2, alpha: 1, clip: null, blur: 0, tracking: 0, maskSelf: false, b };
+    const r = { dx: 0, dy: 0, sx: 1, sy: 1, ox: pivot ? pivot[0] : b.x + b.w / 2, oy: pivot ? pivot[1] : b.y + b.h / 2, alpha: 1, clip: null, blur: 0, tracking: 0, maskSelf: false, b };
     switch (type) {
       case 'fade': r.alpha = p; break;
       case 'slideLeft': r.dx = -dist * q; r.alpha = clamp(p * 3); break;
@@ -692,7 +742,10 @@
       // The clip follows the backdrop's own keyframed transform.
       const m = ctx.getTransform();
       const bx = L.box;
-      applyLayerTransform(ctx, state.backdrop.transform, bx.x + bx.w / 2, bx.y + bx.h / 2, false);
+      if (!s.parentApplied) {
+        applyParents(ctx, state, L, 'backdrop');
+        applyLayerTransform(ctx, state.backdrop.transform, bx, false);
+      } else ctx.setTransform(s.parentApplied);
       ctx.beginPath(); ctx.rect(bx.x, bx.y, bx.w, bx.h);
       ctx.setTransform(m);
       ctx.clip();
@@ -702,13 +755,13 @@
     ctx.letterSpacing = `${baseLs}px`;
     ctx.fillStyle = s.color;
     textShadow(ctx, s);
-    applyLayerTransform(ctx, tr, b.x + b.w / 2, b.y + b.h / 2);
+    applyLayerTransform(ctx, tr, b);
     layerBlur = tr.blur || 0;
 
     if (perUnit || animators.length) {
       if (layerBlur > 0.05) ctx.filter = blurFilter(layerBlur);
       if (!perUnit) {
-        const r = animParams(type, ph.p, b, s.anim.distance);
+        const r = animParams(type, ph.p, b, s.anim.distance, anchored(tr) ? pivotOf(tr, b) : null);
         if (r.maskSelf) { const pad = s.size * 0.25, e = bleed(s); ctx.beginPath(); ctx.rect(b.x - pad - e, b.y - pad * 0.5 - e, b.w + (pad + e) * 2, b.h + pad + 2 * e); ctx.clip(); }
         applyParams(ctx, r, Math.max(s.size, bleed(s)), bleed(s));
       }
@@ -717,7 +770,7 @@
       ctx.restore();
       return;
     }
-    const r = animParams(type, ph.p, b, s.anim.distance);
+    const r = animParams(type, ph.p, b, s.anim.distance, anchored(tr) ? pivotOf(tr, b) : null);
     if (r.maskSelf) {
       const pad = s.size * 0.25, e = bleed(s);
       ctx.beginPath(); ctx.rect(b.x - pad - e, b.y - pad * 0.5 - e, b.w + (pad + e) * 2, b.h + pad + 2 * e); ctx.clip();
@@ -914,9 +967,9 @@
   function drawExtra(ctx, state, ly, b, ph, L) {
     if (ly.kind === 'text') return drawText(ctx, { ...ly, clipToBox: false }, b.line, ph, L, state);
     const tr = ly.transform || NO_TR;
-    const r = animParams(effType(ph), ph.p, b, ly.anim.distance);
+    const r = animParams(effType(ph), ph.p, b, ly.anim.distance, anchored(tr) ? pivotOf(tr, b) : null);
     ctx.save();
-    applyLayerTransform(ctx, tr, b.x + b.w / 2, b.y + b.h / 2);
+    applyLayerTransform(ctx, tr, b);
     layerBlur = tr.blur || 0;
     applyParams(ctx, r, 200, bleed(ly));
     if (layerBlur > 0.05 && !(r.blur > 0.05)) ctx.filter = blurFilter(layerBlur);
@@ -941,6 +994,20 @@
     ctx.restore();
   }
 
+  // Draw a layer inside its parents' transforms. Passes the backdrop's own matrix along, so text
+  // that clips to the backdrop gets the right clip whatever it is parented to.
+  function withParents(ctx, state, L, id, draw) {
+    const chain = parentChain(state, id);
+    if (!chain.length) return draw(null);
+    ctx.save();
+    const m0 = ctx.getTransform();
+    applyParents(ctx, state, L, id);
+    const m = ctx.getTransform();
+    ctx.setTransform(m0); applyParents(ctx, state, L, 'backdrop'); applyLayerTransform(ctx, state.backdrop.transform, L.box, false);
+    const pm = ctx.getTransform(); ctx.setTransform(m);
+    draw(pm);
+    ctx.restore();
+  }
   // ---------- Main render ----------
   function render(ctx, state, t, opts = {}) {
     const base = state;
@@ -965,11 +1032,12 @@
         const type = effType(ph);
         const margin = 200;
         const bb = { x: L.box.x, y: L.box.y, w: L.box.w, h: L.box.h };
-        const r = animParams(type, ph.p, bb, bd.anim.distance);
+        const r = animParams(type, ph.p, bb, bd.anim.distance, anchored(bd.transform) ? pivotOf(bd.transform, bb) : null);
         withMask(ctx, state, 'backdrop', (c) => {
           c.save();
+          applyParents(c, state, L, 'backdrop');
           const tr = bd.transform || NO_TR;
-          applyLayerTransform(c, tr, bb.x + bb.w / 2, bb.y + bb.h / 2);
+          applyLayerTransform(c, tr, bb);
           layerBlur = tr.blur || 0;
           applyParams(c, r, margin, bleed(bd));
           if (layerBlur > 0.05 && !(r.blur > 0.05)) c.filter = blurFilter(layerBlur);
@@ -980,13 +1048,13 @@
       } else if (id === 'title' || id === 'subtitle') {
         const ph = phaseAt(state[id].anim, t, duration);
         if (!ph.visible || L[id].empty || state[id].visible === false) continue;
-        withMask(ctx, state, id, (c) => drawText(c, state[id], L[id], ph, L, state));
+        withMask(ctx, state, id, (c) => withParents(c, state, L, id, (pm) => drawText(c, pm ? { ...state[id], parentApplied: pm } : state[id], L[id], ph, L, state)));
       } else {
         const ly = state.layers && state.layers[id], eb = L.extras[id];
         if (!ly || !eb || ly.visible === false) continue;
         const ph = phaseAt(ly.anim, t, duration);
         if (!ph.visible) continue;
-        withMask(ctx, state, ly, (c) => drawExtra(c, state, ly, eb, ph, L));
+        withMask(ctx, state, ly, (c) => withParents(c, state, L, id, () => drawExtra(c, state, ly, eb, ph, L)));
       }
     }
     void base;
@@ -1072,7 +1140,7 @@
     };
     const eb = L.extras || {};
     for (const [id, b] of Object.entries(eb)) if (state.layers[id] && state.layers[id].visible !== false) out[id] = { x: b.x, y: b.y, w: b.w, h: b.h };
-    for (const k of Object.keys(out)) if (out[k]) out[k].tr = { ...NO_TR, ...((getLayer(state, k) || {}).transform || {}) };
+    for (const k of Object.keys(out)) if (out[k]) { out[k].tr = { ...NO_TR, ...((getLayer(state, k) || {}).transform || {}) }; out[k].parents = parentFrames(state, L, k); }
     return out;
   }
   // Point-in-layer test that undoes the layer's transform (position, rotation, scale).
@@ -1084,18 +1152,19 @@
     for (const k of pick) {
       const b = L.layers[k];
       if (!b) continue;
-      const tr = b.tr || NO_TR;
-      const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
-      let px = x - (tr.x || 0) - cx, py = y - (tr.y || 0) - cy;
-      const a = -((tr.rotation || 0) * Math.PI) / 180;
-      [px, py] = [px * Math.cos(a) - py * Math.sin(a), px * Math.sin(a) + py * Math.cos(a)];
-      const sc = (tr.scale ?? 100) / 100 || 1e-4;
-      px /= sc; py /= sc;
-      if (Math.abs(px) <= b.w / 2 && Math.abs(py) <= b.h / 2) return k;
+      const [qx, qy] = toParentSpace(b.parents, x, y);
+      const [px, py] = invPt(b.tr || NO_TR, b, qx, qy);
+      if (px >= b.x && px <= b.x + b.w && py >= b.y && py <= b.y + b.h) return k;
     }
     return null;
   }
 
+  // Where a layer's anchor point is on screen (rotation/scale leave the pivot itself in place).
+  function anchorScreen(state, id, b) {
+    const tr = (getLayer(state, id) || {}).transform || NO_TR;
+    const [px, py] = pivotOf(tr, b);
+    return fromParentSpace(b.parents, px + (tr.x || 0), py + (tr.y || 0));
+  }
   function drawGuides(ctx, state, L, opts) {
     const { width: W, height: H } = state.comp;
     const lw = Math.max(1, W / 960);
@@ -1135,7 +1204,8 @@
       }
       ctx.save();
       const tr = getLayer(state, opts.selected).transform;
-      if (tr) applyLayerTransform(ctx, tr, b.x + b.w / 2, b.y + b.h / 2, false);
+      for (const f of b.parents || []) applyLayerTransform(ctx, f.tr, f.b, false);
+      if (tr) applyLayerTransform(ctx, tr, b, false);
       ctx.strokeStyle = '#f59e0b'; ctx.lineWidth = 2 * lw; ctx.setLineDash([6 * lw, 4 * lw]);
       ctx.strokeRect(b.x - 3 * lw, b.y - 3 * lw, b.w + 6 * lw, b.h + 6 * lw);
       ctx.setLineDash([]);
@@ -1147,6 +1217,19 @@
       ctx.fillStyle = '#111';
       ctx.fillText(label, b.x + 2 * lw, b.y - 3 * lw - 5 * lw);
       ctx.restore();
+      if (opts.anchor) {
+        // Anchor point (After Effects style): a circle with a cross, where the layer scales and rotates from.
+        const [ax, ay] = anchorScreen(state, opts.selected, b);
+        const r = 7 * lw, arm = 13 * lw;
+        ctx.save();
+        for (const [col, w] of [['rgba(0,0,0,0.75)', 3.5 * lw], ['#ffffff', 1.5 * lw]]) {
+          ctx.strokeStyle = col; ctx.lineWidth = w;
+          ctx.beginPath(); ctx.arc(ax, ay, r, 0, Math.PI * 2);
+          ctx.moveTo(ax - arm, ay); ctx.lineTo(ax + arm, ay); ctx.moveTo(ax, ay - arm); ctx.lineTo(ax, ay + arm);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
     }
     if (opts.bounds) {
       ctx.strokeStyle = 'rgba(255,80,160,0.9)';
@@ -1158,7 +1241,7 @@
 
   global.Engine = {
     BACKDROP_ANIMS, TEXT_ANIMS, SHAPES, GRADIENT_TYPES, GRADIENT_ANIMS, BLEND_MODES, EXTRA_KINDS, EXTRA_SHAPES, getLayer, layerOrder,
-    render, renderFrame, computeLayout, layoutAt, bleed, measureLine, fitTextSizes, extraBoxes, PER_CHAR, PER_WORD, OUT_SWAP, phaseAt, timingSpans, imagesReady, getImage, hitTest, resolveAt, valueAtKeys, selectorAmount,
+    render, renderFrame, computeLayout, layoutAt, bleed, pivotOf, anchorScreen, parentChain, parentFrames, toParentSpace, fromParentSpace, measureLine, fitTextSizes, extraBoxes, PER_CHAR, PER_WORD, OUT_SWAP, phaseAt, timingSpans, imagesReady, getImage, hitTest, resolveAt, valueAtKeys, selectorAmount,
     set onImageLoad(fn) { onImageLoad = fn; },
   };
 })(typeof window !== 'undefined' ? window : globalThis);

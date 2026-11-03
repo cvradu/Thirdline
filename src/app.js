@@ -111,7 +111,34 @@
   function loadAutosave() {
     try { const s = localStorage.getItem('l3rd:last'); return s ? Presets.normalize(JSON.parse(s)) : null; } catch { return null; }
   }
+  // Masks are drawn in frame space. When the whole lower third moves (dragging it, the position
+  // picker, the X/Y fields), its masks move with it; moving a single layer leaves them in place.
+  let seenLayout = null;
+  const measureCtx = document.createElement('canvas').getContext('2d');
+  function masksFollowLayout(record) {
+    const L = state.layout, sig = { x: L.x, y: L.y, hAnchor: L.hAnchor, vAnchor: L.vAnchor };
+    const prev = seenLayout;
+    seenLayout = sig;
+    if (!prev || !record) return;
+    if (prev.x === sig.x && prev.y === sig.y && prev.hAnchor === sig.hAnchor && prev.vAnchor === sig.vAnchor) return;
+    const rs = Engine.resolveAt(state, time);
+    const now = Engine.layoutAt(measureCtx, rs).box;
+    const before = Engine.layoutAt(measureCtx, { ...rs, layout: { ...rs.layout, ...prev } }).box;
+    const dx = now.x - before.x, dy = now.y - before.y;
+    if (!dx && !dy) return;
+    for (const id of Engine.layerOrder(state)) {
+      const ly = Engine.getLayer(state, id);
+      if (!ly || !ly.mask) continue;
+      const base = `${pp(id)}.mask`;
+      for (const [k, d] of [['x', dx], ['y', dy]]) {
+        if (isKeyed(`${base}.${k}`)) keysOf(`${base}.${k}`).forEach((kf) => { kf.v = +(kf.v + d).toFixed(2); });
+        else ly.mask[k] = +((ly.mask[k] || 0) + d).toFixed(2);
+      }
+    }
+  }
+  function noteLayout() { if (!seenLayout) { const L = state.layout; seenLayout = { x: L.x, y: L.y, hAnchor: L.hAnchor, vAnchor: L.vAnchor }; } }
   function changed({ sync = false, record = true } = {}) {
+    masksFollowLayout(record);
     if (sync) syncControls();
     refreshVisibility();
     ensureFonts().then(drawPreview);
@@ -137,7 +164,7 @@
   }
   function undo() { clearTimeout(histTimer); pushHistory(); if (histIndex > 0) { state = JSON.parse(history[--histIndex]); changed({ sync: true, record: false }); } }
   function redo() { if (histIndex < history.length - 1) { state = JSON.parse(history[++histIndex]); changed({ sync: true, record: false }); } }
-  function replaceState(next) { state = Presets.normalize(next); changed({ sync: true }); setTime(Math.min(time, state.comp.duration)); }
+  function replaceState(next) { state = Presets.normalize(next); seenLayout = null; changed({ sync: true }); setTime(Math.min(time, state.comp.duration)); }
 
   // ---------- Keyframes ----------
   const LAYER_NAMES = { backdrop: 'Backdrop', title: 'Title', subtitle: 'Subtitle', layout: 'Position', comp: 'Canvas' };
@@ -161,7 +188,16 @@
   // Top layer first, like the After Effects timeline.
   const tracks = () => Engine.layerOrder(state).slice().reverse().map((k) => [k, layerName(k), layerColor(k)]);
   const keyLabels = {};
-  let selKey = null; // { path, k } (k = keyframe object)
+  let selKey = null; // { path, k } (k = keyframe object): the one shown in the key bar
+  let selKeys = []; // every selected keyframe ({ path, k }), selKey included
+  const isSelKey = (k) => selKeys.some((s) => s.k === k);
+  function pickKey(path, k, add) {
+    if (add) {
+      if (isSelKey(k)) { selKeys = selKeys.filter((s) => s.k !== k); selKey = selKeys[selKeys.length - 1] || null; return; }
+      selKeys.push({ path, k });
+    } else if (!isSelKey(k)) selKeys = [{ path, k }];
+    selKey = { path, k };
+  }
   const fpsT = (t) => Math.round(t * state.comp.fps) / state.comp.fps;
   const keysOf = (path) => (state.keys && state.keys[path]) || null;
   const isKeyed = (path) => !!(keysOf(path) && keysOf(path).length);
@@ -180,7 +216,8 @@
     const v = Engine.valueAtKeys(ks, k.t);
     ks.splice(ks.indexOf(k), 1);
     if (!ks.length) { delete state.keys[path]; setPath(state, path, v); }
-    if (selKey && selKey.k === k) selKey = null;
+    selKeys = selKeys.filter((s) => s.k !== k);
+    if (selKey && selKey.k === k) selKey = selKeys[selKeys.length - 1] || null;
   }
   // Writes a value, keyframing it at the playhead if that property is animated.
   function setValue(path, v) {
@@ -195,9 +232,64 @@
     }
     changed({ sync: true });
   }
+  // Moves a layer's anchor point (in % of its box). Like After Effects' Pan Behind tool, the layer
+  // stays where it is on screen: position is compensated unless it is keyframed.
+  function setAnchor(key, ax, ay) {
+    const tp = (k) => `${pp(key)}.transform.${k}`;
+    const b = lastLayout && lastLayout.layers && lastLayout.layers[key];
+    const ax0 = valueNow(tp('anchorX')) ?? 50, ay0 = valueNow(tp('anchorY')) ?? 50;
+    ax = Math.round(ax * 10) / 10; ay = Math.round(ay * 10) / 10;
+    if (b && !isKeyed(tp('x')) && !isKeyed(tp('y'))) {
+      const dx = ((ax - ax0) / 100) * b.w, dy = ((ay - ay0) / 100) * b.h;
+      const sc = (valueNow(tp('scale')) ?? 100) / 100;
+      const sx = sc * ((valueNow(tp('scaleX')) ?? 100) / 100), sy = sc * ((valueNow(tp('scaleY')) ?? 100) / 100);
+      const a = ((valueNow(tp('rotation')) || 0) * Math.PI) / 180;
+      const mx = Math.cos(a) * sx * dx - Math.sin(a) * sy * dy, my = Math.sin(a) * sx * dx + Math.cos(a) * sy * dy;
+      setPath(state, tp('x'), +((getPath(state, tp('x')) || 0) - (dx - mx)).toFixed(2));
+      setPath(state, tp('y'), +((getPath(state, tp('y')) || 0) - (dy - my)).toFixed(2));
+    }
+    setValue(tp('anchorX'), ax); setValue(tp('anchorY'), ay);
+    changed({ sync: true });
+  }
+  // Parent a layer to another (After Effects style). The layer stays where it is on screen.
+  function descendantsOf(key) {
+    const out = new Set([key]);
+    let grew = true;
+    while (grew) { grew = false; for (const [k] of tracks()) if (!out.has(k) && out.has(lay(k).parent)) { out.add(k); grew = true; } }
+    return out;
+  }
+  function setParent(key, parent) {
+    parent = parent || null;
+    if (parent && descendantsOf(key).has(parent)) return toast('That would make a loop');
+    const tp = (k) => `${pp(key)}.transform.${k}`;
+    const b = lastLayout && lastLayout.layers && lastLayout.layers[key];
+    if (b && !isKeyed(tp('x')) && !isKeyed(tp('y'))) {
+      const tr = Engine.resolveAt(state, time);
+      const own = Engine.getLayer(tr, key).transform || {};
+      const [px, py] = Engine.pivotOf(own, b);
+      const scr = Engine.fromParentSpace(b.parents, px + (own.x || 0), py + (own.y || 0));
+      lay(key).parent = parent;
+      const frames = Engine.parentFrames(Engine.resolveAt(state, time), lastLayout, key);
+      const [qx, qy] = Engine.toParentSpace(frames, ...scr);
+      setPath(state, tp('x'), Math.round((qx - px) * 100) / 100);
+      setPath(state, tp('y'), Math.round((qy - py) * 100) / 100);
+    } else lay(key).parent = parent;
+    if (!parent) delete lay(key).parent;
+    changed({ sync: true });
+  }
+  function parentPicker(key) {
+    const s = el('select', { title: 'Follow another layer’s position, rotation and scale (like parenting in After Effects)' });
+    s.addEventListener('change', () => setParent(key, s.value));
+    addStructureSync(() => {
+      const bad = descendantsOf(key);
+      fillSelect(s, [['', 'None'], ...tracks().filter(([k]) => !bad.has(k)).map(([k, n]) => [k, n])]);
+      s.value = lay(key).parent || '';
+    }, s);
+    return s;
+  }
   function clearKeys(prefix) {
     for (const p of Object.keys(state.keys || {})) if (p.startsWith(prefix)) { const v = valueNow(p); delete state.keys[p]; setPath(state, p, v); }
-    selKey = null;
+    (selKey = null, selKeys = []);
   }
   let advanced = false;
   try { advanced = localStorage.getItem('thirdline:advanced') === '1'; } catch {}
@@ -206,7 +298,7 @@
     $('#optAdvanced').checked = on;
     $('#modeEasy').classList.toggle('on', !on); $('#modeAdv').classList.toggle('on', on);
     try { localStorage.setItem('thirdline:advanced', on ? '1' : '0'); } catch {}
-    if (!on) { selKey = null; selPreset = null; }
+    if (!on) { (selKey = null, selKeys = []); selPreset = null; }
     resizeTimeline();
     if (typeof fitFrame === 'function') requestAnimationFrame(fitFrame);
     if (!on) refreshGallery();
@@ -223,6 +315,28 @@
     recentSwatchSets.forEach((f) => f());
   }
 
+  // Presets grouped by kind, each group a collapsible section (open state remembered).
+  const ANIM_GROUPS = [
+    ['Fades', ['fade', 'blur']],
+    ['Slides', ['slideLeft', 'slideRight', 'slideUp', 'slideDown']],
+    ['Wipes & masks', ['wipeRight', 'wipeLeft', 'wipeUp', 'wipeDown', 'wipeCenter', 'maskUp', 'maskDown']],
+    ['Scales & grows', ['scale', 'pop', 'growX', 'growXCenter', 'growY', 'flipX']],
+    ['Text', ['tracking', 'typewriter']],
+    ['Letters & words', ['lettersFade', 'lettersRise', 'lettersDrop', 'lettersScale', 'lettersBlur', 'wordsRise']],
+  ];
+  // Same grouping for the In/Out dropdowns (optgroups).
+  function groupedAnims(opts) {
+    const out = [], used = new Set();
+    for (const k of ['none']) if (opts[k]) { out.push([k, opts[k]]); used.add(k); }
+    for (const [name, keys] of ANIM_GROUPS) {
+      const items = keys.filter((k) => opts[k]).map((k) => { used.add(k); return [k, opts[k]]; });
+      if (items.length) out.push({ group: name, items });
+    }
+    const rest = Object.keys(opts).filter((k) => !used.has(k)).map((k) => [k, opts[k]]);
+    if (rest.length) out.push({ group: 'More', items: rest });
+    return out;
+  }
+  const libLabel = (label) => label.replace(/ \(from (\w+)\)$/, ' · $1').replace(/ \(.*\)$/, '');
   // ---------- Generic control rows ----------
   const controls = []; // {sync(), def, rowEl}
   const optionsFor = (o) => (typeof o === 'function' ? o() : o);
@@ -721,6 +835,22 @@
     } });
   }
 
+  // 3×3 picker: put the anchor point on a corner, edge or the centre of the layer.
+  function anchorGrid(key) {
+    const g = el('div', { class: 'grid9 anchor9', title: 'Move the anchor point (the layer stays in place)' });
+    const cells = [];
+    for (const ay of [0, 50, 100]) for (const ax of [0, 50, 100]) {
+      const c = el('button', { type: 'button', onclick: () => setAnchor(key, ax, ay) });
+      c.dataset.ax = ax; c.dataset.ay = ay; cells.push(c); g.append(c);
+    }
+    addStructureSync(() => {
+      const tp = (k) => `${pp(key)}.transform.${k}`;
+      const ax = valueNow(tp('anchorX')) ?? 50, ay = valueNow(tp('anchorY')) ?? 50;
+      for (const c of cells) c.classList.toggle('on', +c.dataset.ax === ax && +c.dataset.ay === ay);
+    }, g);
+    return g;
+  }
+
   function animPanel(key) {
     const isBd = key === 'backdrop';
     const isText = key === 'title' || key === 'subtitle' || lay(key).kind === 'text';
@@ -733,13 +863,17 @@
       el('div', { class: 'sub' }, 'Click ◆ to start animating a property, then move the playhead and change the value: a keyframe is added automatically. With a layer selected you can also drag it in the preview.'),
       row({ label: 'Position X', type: 'range', path: tp('x'), key: true, min: -1920, max: 1920, unit: 'px' }),
       row({ label: 'Position Y', type: 'range', path: tp('y'), key: true, min: -1080, max: 1080, unit: 'px' }),
+      row({ label: 'Anchor X', type: 'range', path: tp('anchorX'), key: true, min: -100, max: 200, step: 0.5, unit: '%', title: 'Where the layer scales and rotates from, across its width (0 = left edge, 50 = centre, 100 = right edge)' }),
+      row({ label: 'Anchor Y', type: 'range', path: tp('anchorY'), key: true, min: -100, max: 200, step: 0.5, unit: '%', title: '0 = top, 50 = centre, 100 = bottom' }),
+      el('div', { class: 'row' }, el('label', {}, 'Anchor'), anchorGrid(key)),
+      el('div', { class: 'row' }, el('label', {}, 'Parent'), parentPicker(key)),
       row({ label: 'Scale', type: 'range', path: tp('scale'), key: true, min: 0, max: 400, unit: '%' }),
       row({ label: 'Rotation', type: 'range', path: tp('rotation'), key: true, min: -360, max: 360, step: 0.5, unit: '°' }),
       row({ label: 'Opacity', type: 'range', path: tp('opacity'), key: true, min: 0, max: 100, unit: '%' }),
       row({ label: 'Blur', type: 'range', path: tp('blur'), key: true, min: 0, max: 60, step: 0.5, unit: 'px' }),
       !isText ? null : row({ label: 'Tracking', type: 'range', path: tp('tracking'), key: true, min: -20, max: 120, step: 0.5, unit: 'px' }),
       row({ label: '', type: 'buttons', buttons: [
-        ['Reset transform', () => { clearKeys(`${pp(key)}.transform.`); Object.assign(lay(key).transform, { x: 0, y: 0, scale: 100, rotation: 0, opacity: 100, blur: 0, ...(!isText ? {} : { tracking: 0 }) }); changed({ sync: true }); }],
+        ['Reset transform', () => { clearKeys(`${pp(key)}.transform.`); Object.assign(lay(key).transform, { x: 0, y: 0, scale: 100, rotation: 0, opacity: 100, blur: 0, anchorX: 50, anchorY: 50, ...(!isText ? {} : { tracking: 0 }) }); changed({ sync: true }); }],
         ['Remove all keyframes', () => { clearKeys(`${pp(key)}.`); changed({ sync: true }); toast(`All ${name} keyframes removed`); }, 'Removes keyframes on every property of this layer (values stay as they are now)'],
       ] }),
     ].filter(Boolean));
@@ -751,13 +885,13 @@
       maskSec,
       animSec,
       section(`${name} · In`, [
-        row({ label: 'Animation', type: 'select', path: `${base}.in.type`, options: opts }),
+        row({ label: 'Animation', type: 'select', path: `${base}.in.type`, options: groupedAnims(opts) }),
         row({ label: 'Start at', type: 'range', path: `${base}.in.delay`, min: 0, max: 10, step: 0.05, unit: 's' }),
         row({ label: 'Duration', type: 'range', path: `${base}.in.duration`, min: 0.05, max: 5, step: 0.05, unit: 's', show: (s) => lay(key).anim.in.type !== 'none' }),
         easingControl(`${base}.in`),
       ]),
       section(`${name} · Out`, [
-        row({ label: 'Animation', type: 'select', path: `${base}.out.type`, options: { ...opts, none: 'None (stay on screen)' } }),
+        row({ label: 'Animation', type: 'select', path: `${base}.out.type`, options: groupedAnims({ ...opts, none: 'None (stay on screen)' }) }),
         row({ label: 'Duration', type: 'range', path: `${base}.out.duration`, min: 0.05, max: 5, step: 0.05, unit: 's', show: (s) => lay(key).anim.out.type !== 'none' }),
         row({ label: 'Ends before end', type: 'range', path: `${base}.out.offset`, min: 0, max: 5, step: 0.05, unit: 's' }),
         easingControl(`${base}.out`),
@@ -875,7 +1009,7 @@
       next[n > i ? `${pre}${n - 1}.${rest.join('.')}` : p] = ks;
     }
     state.keys = next;
-    selKey = null;
+    (selKey = null, selKeys = []);
   }
   function animatorsSection(key, name) {
     const owner = `animators-${key}`;
@@ -1097,7 +1231,7 @@
     delete state.layers[id];
     state.order = (state.order || []).filter((x) => x !== id);
     for (const p of Object.keys(state.keys || {})) if (p.startsWith(`layers.${id}.`)) delete state.keys[p];
-    selKey = null; selPreset = null;
+    (selKey = null, selKeys = []); selPreset = null;
     changed({ sync: true }); selectLayer(null);
   }
   $('#btnAddLayer').onclick = (e) => { e.stopPropagation(); $('#addMenu').hidden = !$('#addMenu').hidden; };
@@ -1106,16 +1240,30 @@
     const lib = $('#animLib'); lib.innerHTML = '';
     const all = { ...BACKDROP_ANIMS, ...TEXT_ANIMS };
     delete all.none;
-    for (const [k, label] of Object.entries(all)) {
-      lib.append(el('button', { type: 'button', title: 'Click: in animation · Shift+click: out animation', onclick: (e) => {
-        if (!selected) return toast('Select a layer first (click it in the preview or the layer list)');
-        const isText = selected === 'title' || selected === 'subtitle' || lay(selected).kind === 'text';
-        if (!(isText ? TEXT_ANIMS : BACKDROP_ANIMS)[k]) return toast(`“${label}” only works on ${isText ? 'shapes' : 'text'} layers`);
-        const dir = e.shiftKey ? 'out' : 'in';
-        lay(selected).anim[dir].type = k;
-        changed({ sync: true });
-        toast(`${layerName(selected)} ${dir}: ${label}`);
-      } }, label.replace(/ \(.*\)$/, '')));
+    let openState = {};
+    try { openState = JSON.parse(localStorage.getItem('l3rd.animGroups') || '{}'); } catch {}
+    const grouped = new Set(ANIM_GROUPS.flatMap((g) => g[1]));
+    const groups = [...ANIM_GROUPS, ['More', Object.keys(all).filter((k) => !grouped.has(k))]];
+    for (const [name, keys] of groups) {
+      const ks = keys.filter((k) => all[k]);
+      if (!ks.length) continue;
+      const body = el('div', { class: 'lib-items' });
+      const det = el('details', { class: 'lib-group' }, el('summary', {}, name, el('span', { class: 'count' }, String(ks.length))), body);
+      det.open = openState[name] ?? true;
+      det.addEventListener('toggle', () => { openState[name] = det.open; try { localStorage.setItem('l3rd.animGroups', JSON.stringify(openState)); } catch {} });
+      for (const k of ks) {
+        const label = all[k];
+        body.append(el('button', { type: 'button', title: 'Click: in animation · Shift+click: out animation', onclick: (e) => {
+          if (!selected) return toast('Select a layer first (click it in the preview or the layer list)');
+          const isText = selected === 'title' || selected === 'subtitle' || lay(selected).kind === 'text';
+          if (!(isText ? TEXT_ANIMS : BACKDROP_ANIMS)[k]) return toast(`“${libLabel(label)}” only works on ${isText ? 'shapes' : 'text'} layers`);
+          const dir = e.shiftKey ? 'out' : 'in';
+          lay(selected).anim[dir].type = k;
+          changed({ sync: true });
+          toast(`${layerName(selected)} ${dir}: ${libLabel(label)}`);
+        } }, libLabel(label)));
+      }
+      lib.append(det);
     }
   }
 
@@ -1304,8 +1452,42 @@
       el('button', { type: 'button', title: 'Shorter', onclick: () => setHold(Math.round((holdSeconds() - 0.5) * 2) / 2) }, '−'), holdVal,
       el('button', { type: 'button', title: 'Longer', onclick: () => setHold(Math.round((holdSeconds() + 0.5) * 2) / 2) }, '+'));
     bind(() => { holdVal.textContent = `${+holdSeconds().toFixed(1)} s`; });
+    // Each part on its own: In / Out animation and when it starts.
+    currentOwner = 'easy';
+    const custom = () => { if (state.ui.motion !== 'custom') { state.ui.motion = 'custom'; changed({ sync: true }); } };
+    const partRows = [];
+    for (const k of BUILTIN_IDS) {
+      const opts = k === 'backdrop' ? BACKDROP_ANIMS : TEXT_ANIMS;
+      const show = (s) => k !== 'backdrop' || s.backdrop.type !== 'none';
+      partRows.push(el('div', { class: 'part-head' }, el('span', { class: 'dot', style: `background:${layerColor(k)}` }), layerName(k)));
+      partRows.push(
+        row({ label: 'In', type: 'select', path: `${k}.anim.in.type`, options: groupedAnims(opts), show, onSet: () => { custom(); playFromStart(); } }),
+        row({ label: 'Out', type: 'select', path: `${k}.anim.out.type`, options: groupedAnims({ ...opts, none: 'None (stay on screen)' }), show, onSet: custom }),
+        row({ label: 'Starts at', type: 'range', path: `${k}.anim.in.delay`, min: 0, max: 3, step: 0.05, unit: 's', show, onSet: custom }),
+      );
+    }
+    const parts = el('details', { class: 'parts', open: '' }, el('summary', {}, 'Animate each part'), el('div', {}, ...partRows));
+    currentOwner = null;
     const step4 = el('div', { class: 'step' }, el('h3', {}, el('b', {}, '4'), 'Motion'), chips,
-      el('div', { class: 'two', style: 'margin-top:10px' }, el('div', {}, el('label', { class: 'l' }, 'Speed'), speedSeg), el('div', {}, el('label', { class: 'l' }, 'On screen for'), stepper)));
+      el('div', { class: 'two', style: 'margin-top:10px' }, el('div', {}, el('label', { class: 'l' }, 'Speed'), speedSeg), el('div', {}, el('label', { class: 'l' }, 'On screen for'), stepper)),
+      parts);
+
+    // Fine-tune: sizes and spacing, the things people nudge most.
+    currentOwner = 'easy';
+    const fine = el('details', { class: 'more' }, el('summary', {}, 'Fine-tune', el('span', { class: 'sub', style: 'margin:0' }, 'sizes, spacing, logo')),
+      el('div', { class: 'more-body' },
+        row({ label: 'Name size', type: 'range', path: 'title.size', min: 10, max: 220, unit: 'px' }),
+        row({ label: 'Title size', type: 'range', path: 'subtitle.size', min: 8, max: 160, unit: 'px' }),
+        row({ label: 'Name spacing', type: 'range', path: 'title.letterSpacing', min: -5, max: 30, step: 0.5, unit: 'px' }),
+        row({ label: 'Line gap', type: 'range', path: 'layout.lineGap', min: -30, max: 80, unit: 'px' }),
+        row({ label: 'Box padding', type: 'range', path: 'backdrop.padX', min: 0, max: 160, unit: 'px', show: (s) => s.backdrop.type !== 'none' }),
+        row({ label: 'Box height pad', type: 'range', path: 'backdrop.padY', min: 0, max: 120, unit: 'px', show: (s) => s.backdrop.type !== 'none' }),
+        row({ label: 'Corner radius', type: 'range', path: 'backdrop.radius', min: 0, max: 80, unit: 'px', show: (s) => s.backdrop.type === 'shape' && ['rounded', 'accent', 'twoTone', 'pill'].includes(s.backdrop.shape) }),
+        row({ label: 'Box opacity', type: 'range', path: 'backdrop.opacity', min: 0, max: 1, step: 0.01, show: (s) => s.backdrop.type !== 'none' }),
+        row({ label: 'Accent width', type: 'range', path: 'backdrop.accentWidth', min: 0, max: 60, unit: 'px', show: (s) => s.backdrop.type === 'shape' && /accent|underline|sideBar|twoTone/.test(s.backdrop.shape) }),
+        row({ label: 'Logo', type: 'buttons', buttons: [['Add logo / image…', () => addLayer('image'), 'Adds an image layer next to the text (move and animate it in Advanced)']] }),
+      ));
+    currentOwner = null;
 
     // More options: the handful of settings people look for next.
     currentOwner = 'easy';
@@ -1352,7 +1534,7 @@
         el('div', { class: 'sub' }, 'Everything else (layers, keyframes, masks, letter animators) is in Advanced.'),
       ));
     currentOwner = null;
-    root.append(step2, step3, step4, more);
+    root.append(step2, step3, step4, fine, more);
     addStructureSync(() => sync.forEach((f) => f()));
     sync.forEach((f) => f());
   }
@@ -1515,10 +1697,11 @@
   new ResizeObserver(fitFrame).observe(viewport);
 
   function drawPreview() {
+    noteLayout();
     if (preview.width !== state.comp.width || preview.height !== state.comp.height) { preview.width = state.comp.width; preview.height = state.comp.height; fitFrame(); }
     const mb = state.comp.motionBlur;
     const mbOpts = mb && mb.enabled && mb.preview && !dragging ? { samples: Math.min(mb.samples, playing ? 4 : 8) } : { noMotionBlur: true };
-    lastLayout = Engine.renderFrame(pctx, state, time, { guides: true, safeAreas: view.safeAreas, bounds: view.bounds || dragging, selected, ...mbOpts });
+    lastLayout = Engine.renderFrame(pctx, state, time, { guides: true, safeAreas: view.safeAreas, bounds: view.bounds || dragging, selected, anchor: advanced, ...mbOpts });
     const fps = state.comp.fps;
     const f = Math.round(time * fps);
     $('#timecode').textContent = `${time.toFixed(2)}s · f${f} / ${Math.round(state.comp.duration * fps)}`;
@@ -1560,8 +1743,43 @@
     if (hit !== selected) selectLayer(hit);
     dragging = true; preview.setPointerCapture(e.pointerId);
     dragStart = { m: [cx, cy], x: state.layout.x, y: state.layout.y };
-    if (advanced && hit && hit === selected) dragStart.layer = { key: hit, x: valueNow(`${hit}.transform.x`), y: valueNow(`${hit}.transform.y`) };
+    if (advanced && hit && hit === selected) dragStart.layer = { key: hit, x: valueNow(`${pp(hit)}.transform.x`), y: valueNow(`${pp(hit)}.transform.y`), frames: (lastLayout.layers[hit] || {}).parents || [] };
   });
+  // Advanced: grab the anchor point of the selected layer to move it.
+  function anchorHit(e) {
+    if (!advanced || !selected || !lastLayout || !lastLayout.layers || !lastLayout.layers[selected]) return false;
+    const [cx, cy] = toComp(e);
+    const [ax, ay] = Engine.anchorScreen(state, selected, lastLayout.layers[selected]);
+    const tol = 14 * (state.comp.width / preview.getBoundingClientRect().width);
+    return Math.hypot(cx - ax, cy - ay) <= tol;
+  }
+  preview.addEventListener('pointerdown', (e) => {
+    if (!anchorHit(e)) return;
+    e.stopImmediatePropagation();
+    preview.setPointerCapture(e.pointerId);
+    anchorDrag = { key: selected };
+  }, true);
+  let anchorDrag = null;
+  preview.addEventListener('pointermove', (e) => {
+    if (!anchorDrag) { if (!dragging) preview.style.cursor = anchorHit(e) ? 'crosshair' : ''; return; }
+    e.stopImmediatePropagation();
+    const key = anchorDrag.key, b = lastLayout.layers[key];
+    if (!b) return;
+    const tr = Engine.getLayer(Engine.resolveAt(state, time), key).transform || {};
+    // Pointer → layer space (undo position, rotation, scale around the current pivot).
+    const [cx, cy] = Engine.toParentSpace(b.parents, ...toComp(e));
+    const [px, py] = Engine.pivotOf(tr, b);
+    let dx = cx - (tr.x || 0) - px, dy = cy - (tr.y || 0) - py;
+    const a = -((tr.rotation || 0) * Math.PI) / 180;
+    [dx, dy] = [dx * Math.cos(a) - dy * Math.sin(a), dx * Math.sin(a) + dy * Math.cos(a)];
+    const sc = (tr.scale ?? 100) / 100;
+    dx /= sc * ((tr.scaleX ?? 100) / 100) || 1e-4; dy /= sc * ((tr.scaleY ?? 100) / 100) || 1e-4;
+    let ax = (((px + dx) - b.x) / b.w) * 100, ay = (((py + dy) - b.y) / b.h) * 100;
+    // Snap to corners, edges and the centre (hold Alt to place freely).
+    if (!e.altKey) for (const v of [0, 50, 100]) { if (Math.abs(ax - v) < 6) ax = v; if (Math.abs(ay - v) < 6) ay = v; }
+    setAnchor(key, ax, ay);
+  }, true);
+  preview.addEventListener('pointerup', (e) => { if (anchorDrag) { anchorDrag = null; e.stopImmediatePropagation(); dragging = false; drawPreview(); } }, true);
   preview.addEventListener('dblclick', (e) => {
     const [cx, cy] = toComp(e);
     const hit = Engine.hitTest(lastLayout, cx, cy);
@@ -1569,11 +1787,17 @@
   });
   preview.addEventListener('pointermove', (e) => {
     if (!dragging) return;
-    const [mx, my] = toComp(e);
+    let [mx, my] = toComp(e);
+    // Shift locks the move to whichever axis you're moving along most.
+    if (e.shiftKey) {
+      if (Math.abs(mx - dragStart.m[0]) >= Math.abs(my - dragStart.m[1])) my = dragStart.m[1]; else mx = dragStart.m[0];
+    }
     if (dragStart.layer) {
       const d = dragStart.layer;
-      setValue(`${d.key}.transform.x`, Math.round(d.x + mx - dragStart.m[0]));
-      setValue(`${d.key}.transform.y`, Math.round(d.y + my - dragStart.m[1]));
+      // A parented layer moves in its parent's (possibly rotated or scaled) space.
+      const [qx, qy] = Engine.toParentSpace(d.frames, mx, my), [q0x, q0y] = Engine.toParentSpace(d.frames, ...dragStart.m);
+      setValue(`${pp(d.key)}.transform.x`, Math.round(d.x + qx - q0x));
+      setValue(`${pp(d.key)}.transform.y`, Math.round(d.y + qy - q0y));
       changed({ sync: true });
       return;
     }
@@ -1744,11 +1968,19 @@
         g.strokeStyle = '#ffffff30'; g.beginPath();
         if (ks.length > 1) { g.moveTo(sx(ks[0].t), y + TL.keyH / 2); g.lineTo(sx(ks[ks.length - 1].t), y + TL.keyH / 2); g.stroke(); }
         for (const k of ks) {
-          const on = selKey && selKey.k === k;
+          const on = isSelKey(k);
           g.fillStyle = on ? '#f59e0b' : k.e === 'hold' ? '#94a3b8' : '#e5e7eb';
           diamond(g, sx(k.t), y + TL.keyH / 2, on ? 6 : 4.5);
         }
       }
+    }
+    // Box selection
+    if (tlDrag && tlDrag.box) {
+      const x = Math.min(tlDrag.x0, tlDrag.x1), y = Math.min(tlDrag.y0, tlDrag.y1);
+      g.fillStyle = '#f59e0b18'; g.strokeStyle = '#f59e0b'; g.setLineDash([3, 3]);
+      g.fillRect(x, y, Math.abs(tlDrag.x1 - tlDrag.x0), Math.abs(tlDrag.y1 - tlDrag.y0));
+      g.strokeRect(x + 0.5, y + 0.5, Math.abs(tlDrag.x1 - tlDrag.x0), Math.abs(tlDrag.y1 - tlDrag.y0));
+      g.setLineDash([]);
     }
     // Playhead
     const px = sx(time);
@@ -1756,7 +1988,7 @@
     g.fillStyle = '#fff'; g.beginPath(); g.moveTo(px - 5, 0); g.lineTo(px + 5, 0); g.lineTo(px, 7); g.fill();
     g.fillStyle = '#596176'; g.font = '10px -apple-system, sans-serif';
     g.fillText(advanced
-      ? 'Click a ramp or ◆ to edit or delete its animation · drag ◆ to retime · ▾ folds a layer’s keyframes'
+      ? 'Click ◆ or a ramp to edit · Shift+click or drag a box to select several ◆ · drag ◆ to retime · ▾ folds a layer’s keys'
       : 'Ramp: transition length · outer edge: in/out point · middle: move layer', TL.left, h - 6);
   }
   tl.addEventListener('pointerdown', (e) => {
@@ -1780,12 +2012,22 @@
       for (const k of ks) { const d = Math.abs(sx(k.t) - mx); if (d < bd) { bd = d; best = k; } }
       if (layerColor(row.layer) && selected !== row.layer) selectLayer(row.layer, { reveal: true });
       if (best) {
-        selKey = { path: row.path, k: best }; selPreset = null; setPlaying(false);
-        tlDrag = { keyDrag: true, path: row.path, k: best, moved: false };
-        setTime(best.t); updateKeyBar();
+        const add = e.shiftKey || e.metaKey || e.ctrlKey;
+        pickKey(row.path, best, add); selPreset = null; setPlaying(false);
+        if (add && !isSelKey(best)) { updateKeyBar(); drawTimeline(); release(); return; }
+        // Dragging moves every selected keyframe together.
+        tlDrag = { keyDrag: true, path: row.path, k: best, t0: best.t, moved: false, group: selKeys.map((s) => ({ ...s, t0: s.k.t })) };
+        setTime(best.t); updateKeyBar(); drawTimeline();
         return;
       }
-      selKey = null; updateKeyBar();
+    }
+    // Advanced: drag on an empty spot of the keyframe area to box-select keyframes.
+    if (advanced && mx >= TL.left && (!row || row.type === 'key' || row.type === 'group')) {
+      const add = e.shiftKey || e.metaKey || e.ctrlKey;
+      tlDrag = { box: true, x0: mx, y0: my, x1: mx, y1: my, base: add ? selKeys.slice() : [] };
+      if (!add) (selKey = null, selKeys = []);
+      selPreset = null; setPlaying(false); updateKeyBar(); drawTimeline();
+      return;
     }
     if (row && row.type === 'bar') {
       const key = row.key;
@@ -1802,7 +2044,7 @@
         if (advanced) {
           const dir = mode === 'in' || mode === 'inDur' ? 'in' : mode === 'out' || mode === 'outDur' ? 'out' : null;
           selPreset = dir && a[dir].type !== 'none' ? { key, dir } : null;
-          if (selPreset) selKey = null;
+          if (selPreset) (selKey = null, selKeys = []);
           updateKeyBar(); drawTimeline();
         }
         tlDrag = { key, mode, t0: st(mx), delay: a.in.delay, offset: a.out.offset, inDur: a.in.duration, outDur: a.out.duration };
@@ -1826,9 +2068,28 @@
       changed({ sync: true });
       return;
     }
+    if (tlDrag.box) {
+      tlDrag.x1 = e.clientX - r.left; tlDrag.y1 = e.clientY - r.top;
+      const { sx } = tlGeom();
+      const [xa, xb] = [Math.min(tlDrag.x0, tlDrag.x1), Math.max(tlDrag.x0, tlDrag.x1)];
+      const [ya, yb] = [Math.min(tlDrag.y0, tlDrag.y1), Math.max(tlDrag.y0, tlDrag.y1)];
+      const inBox = [];
+      for (const row of timelineRows()) {
+        if (row.type !== 'key' || row.y + row.h < ya || row.y > yb) continue;
+        for (const k of state.keys[row.path]) { const x = sx(k.t); if (x >= xa - 4 && x <= xb + 4) inBox.push({ path: row.path, k }); }
+      }
+      selKeys = [...tlDrag.base.filter((s) => !inBox.some((b) => b.k === s.k)), ...inBox];
+      selKey = selKeys[selKeys.length - 1] || null;
+      updateKeyBar(); drawTimeline();
+      return;
+    }
     if (tlDrag.keyDrag) {
-      tlDrag.k.t = Math.max(0, Math.min(state.comp.duration, fpsT(t)));
-      sortKeys(tlDrag.path);
+      const g = tlDrag.group, D = state.comp.duration;
+      // Keep the whole group inside the timeline.
+      const lo = Math.min(...g.map((s) => s.t0)), hi = Math.max(...g.map((s) => s.t0));
+      const dt = Math.max(-lo, Math.min(D - hi, fpsT(t) - tlDrag.t0));
+      for (const s of g) { s.k.t = fpsT(s.t0 + dt); }
+      for (const path of new Set(g.map((s) => s.path))) sortKeys(path);
       changed({ sync: true });
       setTime(tlDrag.k.t);
       return;
@@ -1842,7 +2103,15 @@
     if (tlDrag.mode === 'outDur') a.out.duration = Math.max(0.05, r2(Math.min(tlDrag.outDur - dt, D - a.out.offset)));
     changed({ sync: true });
   });
-  tl.addEventListener('pointerup', () => { const wasEnd = tlDrag && tlDrag.endDrag; tlDrag = null; if (wasEnd) { tlSpan = 0; drawTimeline(); } });
+  tl.addEventListener('pointerup', (e) => {
+    const d = tlDrag; tlDrag = null;
+    if (d && d.endDrag) { tlSpan = 0; drawTimeline(); }
+    if (d && d.box) {
+      // A click (no drag) on empty keyframe space still moves the playhead.
+      if (Math.abs(d.x1 - d.x0) < 3 && Math.abs(d.y1 - d.y0) < 3) setTime(tlGeom().st(d.x0));
+      drawTimeline();
+    }
+  });
   // Which part of a layer bar is under the mouse:
   //  outer end of a ramp → move the in/out point; the ramp (graph) itself → change that transition's duration;
   //  the hold section → move the whole layer.
@@ -1939,8 +2208,10 @@
   const keyBar = $('#keyBar');
   function updateKeyBar() {
     if (selPreset && (!advanced || lay(selPreset.key).anim[selPreset.dir].type === 'none')) selPreset = null;
-    const keyOk = selKey && isKeyed(selKey.path) && keysOf(selKey.path).includes(selKey.k);
-    if (!keyOk) selKey = null;
+    const live = (x) => x && isKeyed(x.path) && keysOf(x.path).includes(x.k);
+    selKeys = selKeys.filter(live);
+    if (!live(selKey)) selKey = selKeys[selKeys.length - 1] || null;
+    const keyOk = !!selKey;
     $('#kbKeyCtl').hidden = !keyOk; $('#kbPreCtl').hidden = !selPreset;
     keyBar.hidden = !keyOk && !selPreset;
     if (selPreset) {
@@ -1961,7 +2232,7 @@
     if (!keyOk) return;
     const { path, k } = selKey;
     $('#kbDelete').title = 'Delete keyframe (Delete)';
-    $('#kbLabel').textContent = `◆ ${keyLabel(path)}`;
+    $('#kbLabel').textContent = selKeys.length > 1 ? `◆ ${selKeys.length} keyframes · ${keyLabel(path)}` : `◆ ${keyLabel(path)}`;
     $('#kbTime').textContent = `${k.t.toFixed(2)}s`;
     const vi = $('#kbValue');
     const isColor = typeof k.v === 'string';
@@ -1983,12 +2254,18 @@
   $('#kbEase').addEventListener('change', (e) => {
     if (!selKey) return;
     if (e.target.value === 'custom') return openGraph({ kind: 'key', ...selKey });
-    selKey.k.e = e.target.value; changed(); updateKeyBar(); drawTimeline();
+    for (const s of selKeys.length ? selKeys : [selKey]) s.k.e = e.target.value;
+    changed(); updateKeyBar(); drawTimeline();
   });
   $('#kbDelete').onclick = () => {
     if (selPreset) return deletePreset(selPreset.key, selPreset.dir);
-    if (selKey) { removeKey(selKey.path, selKey.k); changed({ sync: true }); updateKeyBar(); }
+    if (selKey) { deleteSelectedKeys(); }
   };
+  function deleteSelectedKeys() {
+    for (const s of (selKeys.length ? selKeys : [selKey]).slice()) removeKey(s.path, s.k);
+    (selKey = null, selKeys = []);
+    changed({ sync: true }); updateKeyBar();
+  }
   $('#kpType').addEventListener('change', (e) => { if (selPreset) { lay(selPreset.key).anim[selPreset.dir].type = e.target.value; changed({ sync: true }); } });
   $('#kpDur').addEventListener('input', (e) => {
     if (!selPreset || !(+e.target.value > 0)) return;
@@ -2063,8 +2340,8 @@
     return null;
   }
   function selectHit(hit) {
-    if (hit.kind === 'key') { selKey = { path: hit.path, k: hit.k }; selPreset = null; }
-    else { selPreset = { key: hit.key, dir: hit.dir }; selKey = null; }
+    if (hit.kind === 'key') { pickKey(hit.path, hit.k, false); selPreset = null; }
+    else { selPreset = { key: hit.key, dir: hit.dir }; (selKey = null, selKeys = []); }
     const layer = hit.kind === 'key' ? pathLayer(hit.path) : hit.key;
     if (layerColor(layer) && selected !== layer) selectLayer(layer);
     updateKeyBar(); drawTimeline();
@@ -2086,14 +2363,16 @@
     };
     const sep = () => ctxMenu.append(el('hr'));
     ctxMenu.append(el('div', { class: 'ctx-sub' }, 'Easing'));
-    for (const [e, label] of MENU_EASES) item(label, () => { T.set(e); changed({ sync: true }); }, { on: T.e === e });
-    if (hit.kind === 'key') item('Hold (jump)', () => { T.set('hold'); changed({ sync: true }); }, { on: T.e === 'hold' });
+    // On a multi-selection the easing goes to every selected keyframe.
+    const setAll = (ez) => { T.set(ez); if (hit.kind === 'key' && isSelKey(hit.k)) for (const s of selKeys) if (s.k !== hit.k) s.k.e = ez; changed({ sync: true }); };
+    for (const [e, label] of MENU_EASES) item(label, () => setAll(e), { on: T.e === e });
+    if (hit.kind === 'key') item('Hold (jump)', () => setAll('hold'), { on: T.e === 'hold' });
     if (T.e === 'custom') item('Custom curve', () => openGraph(hit), { on: true });
     sep();
     item('Edit curve in graph editor…', () => openGraph(hit));
     if (hit.kind === 'preset') item('Convert to keyframes', () => convertPreset(hit.key, hit.dir), { disabled: !CONVERTIBLE[lay(hit.key).anim[hit.dir].type] });
-    item(hit.kind === 'key' ? 'Delete keyframe' : 'Remove animation', () => {
-      if (hit.kind === 'key') { removeKey(hit.path, hit.k); changed({ sync: true }); updateKeyBar(); } else deletePreset(hit.key, hit.dir);
+    item(hit.kind === 'key' ? (isSelKey(hit.k) && selKeys.length > 1 ? `Delete ${selKeys.length} keyframes` : 'Delete keyframe') : 'Remove animation', () => {
+      if (hit.kind === 'key') { if (isSelKey(hit.k)) deleteSelectedKeys(); else { removeKey(hit.path, hit.k); changed({ sync: true }); updateKeyBar(); } } else deletePreset(hit.key, hit.dir);
     });
     ctxMenu.hidden = false;
     const r = ctxMenu.getBoundingClientRect();
@@ -2345,7 +2624,7 @@
       await addUserFont({ family: f.family, file: f.file, data: buf });
       if (api.fonts.installData) api.fonts.installData(f.file, new Uint8Array(buf)).catch(() => {});
     }
-    selKey = null;
+    (selKey = null, selKeys = []);
     replaceState(st);
     history = [JSON.stringify(state)]; histIndex = 0;
     projectPath = data.format === 'thirdline-project' ? p : null;
@@ -2362,7 +2641,7 @@
   }
   function newProject() {
     if (!confirmDiscard()) return;
-    selKey = null;
+    (selKey = null, selKeys = []);
     replaceState(Presets.defaultState());
     history = [JSON.stringify(state)]; histIndex = 0;
     projectPath = null; setDirty(false);
@@ -2690,9 +2969,9 @@
     else if (e.key === 'ArrowLeft') $('#btnPrevFrame').click();
     else if (e.key === 'ArrowRight') $('#btnNextFrame').click();
     else if (e.key === 'Home') $('#btnStart').click();
-    else if (e.key === 'Escape') { selKey = null; selPreset = null; updateKeyBar(); drawTimeline(); selectLayer(null); }
+    else if (e.key === 'Escape') { (selKey = null, selKeys = []); selPreset = null; updateKeyBar(); drawTimeline(); selectLayer(null); }
     else if ((e.key === 'Delete' || e.key === 'Backspace') && selPreset) { e.preventDefault(); deletePreset(selPreset.key, selPreset.dir); }
-    else if ((e.key === 'Delete' || e.key === 'Backspace') && selKey) { e.preventDefault(); removeKey(selKey.path, selKey.k); changed({ sync: true }); updateKeyBar(); }
+    else if ((e.key === 'Delete' || e.key === 'Backspace') && selKey) { e.preventDefault(); deleteSelectedKeys(); }
     else if (e.key.toLowerCase() === 'j') jumpKey(-1);
     else if (e.key.toLowerCase() === 'k') jumpKey(1);
     else if (e.key === 'Tab' && document.activeElement === document.body) { e.preventDefault(); const order = tracks().map((t) => t[0]); selectLayer(order[(order.indexOf(selected) + (e.shiftKey ? order.length - 1 : 1)) % order.length]); }
@@ -2717,7 +2996,9 @@
     $('#btnHold').click();
     drawTimeline();
     refreshGallery();
-    window.__l3rd = { get state() { return state; }, setTime, replaceState, render: drawPreview, selectLayer, addLayer, loadCSV, openBatch, openMogrt };
+    window.__l3rd = { get state() { return state; }, setTime, replaceState, render: drawPreview, selectLayer, addLayer, loadCSV, openBatch, openMogrt,
+      selKeyCount: () => selKeys.length, selKeyTimes: () => selKeys.map((s) => s.k.t),
+      tlDebug: () => { const g = tlGeom(); return { rows: timelineRows(), left: TL.left, right: TL.right, w: g.w, span: g.span }; } };
     setTimeout(() => checkUpdates(false).catch(() => {}), 3000);
   }
   boot();

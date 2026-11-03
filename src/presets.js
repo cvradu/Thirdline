@@ -7,7 +7,7 @@
     out: { type: outType, duration: o.outDur ?? 0.45, offset: o.offset ?? 0, easing: o.outEase ?? 'easeInCubic', bezier: [0.42, 0, 1, 1] },
   });
 
-  const transform = (text) => ({ x: 0, y: 0, scale: 100, rotation: 0, opacity: 100, blur: 0, ...(text ? { tracking: 0 } : {}) });
+  const transform = (text) => ({ x: 0, y: 0, scale: 100, rotation: 0, opacity: 100, blur: 0, anchorX: 50, anchorY: 50, ...(text ? { tracking: 0 } : {}) });
   const mask = () => ({ enabled: false, shape: 'rect', x: 100, y: 760, w: 900, h: 240, radius: 0, feather: 0, invert: false });
 
   function defaultState() {

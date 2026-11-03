@@ -225,7 +225,14 @@ details.more > .more-body { padding: 0 16px 20px; }
 .layer-row .eye.off { opacity: .35; }
 .layer-row .x { visibility: hidden; } .layer-row:hover .x { visibility: visible; }
 .layer-row.hidden-layer .nm { opacity: .5; text-decoration: line-through; }
-.lib { display: flex; flex-wrap: wrap; gap: 5px; }
+.lib { display: flex; flex-direction: column; gap: 4px; }
+.lib-items { display: flex; flex-wrap: wrap; gap: 5px; padding: 4px 0 8px; }
+.lib-group > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; color: var(--muted, #9aa3b2); padding: 4px 2px; border-radius: 4px; user-select: none; }
+.lib-group > summary::-webkit-details-marker { display: none; }
+.lib-group > summary::before { content: '▸'; font-size: 9px; transition: transform .12s; }
+.lib-group[open] > summary::before { transform: rotate(90deg); }
+.lib-group > summary:hover { color: var(--text, #e6e9ef); }
+.lib-group .count { margin-left: auto; font-weight: 400; opacity: .6; }
 .lib button { font-size: 11px; padding: 4px 8px; }
 #inspector .section { padding: 0; }
 #inspector .section > h3 { padding: 10px 14px; margin: 0; cursor: pointer; }
@@ -257,3 +264,10 @@ details.more > summary .sub { margin-left: auto; margin-right: 8px; }
 .mogrt-hint a { color: var(--accent); }
 #mogrtDialog .chk { display: flex; gap: 8px; align-items: flex-start; white-space: normal; line-height: 1.4; margin: 12px 0 4px; }
 #mogrtDialog .modal { max-width: 520px; }
+
+/* Easy mode: per-part animation */
+details.parts { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 8px; }
+details.parts > summary { cursor: pointer; color: var(--muted); font-size: 12px; list-style: none; padding: 4px 0; }
+details.parts > summary::before { content: '▸ '; } details.parts[open] > summary::before { content: '▾ '; }
+.part-head { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; color: var(--text); margin: 10px 0 2px; text-transform: uppercase; letter-spacing: .04em; }
+.part-head .dot { width: 8px; height: 8px; border-radius: 50%; }
