@@ -30,10 +30,14 @@ input[type=range] { accent-color: var(--accent); }
 .topbar-group:last-child { margin-left: auto; }
 #presetSelect { min-width: 200px; }
 
-.workspace { display: grid; grid-template-columns: 300px 1fr 350px; height: calc(100% - 52px); }
-body.advanced .workspace { grid-template-columns: 250px 1fr 340px; }
-.panel { background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+.workspace { --lw-def: 300px; --rw-def: 350px; display: grid; grid-template-columns: var(--lw-def) minmax(0, 1fr) var(--rw-def); height: calc(100% - 52px); }
+body.advanced .workspace { --lw-def: 250px; --rw-def: 340px; }
+.panel { background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; position: relative; }
 #rightPanel { border-right: 0; border-left: 1px solid var(--line); }
+/* Swapped sidebars: the panels trade sides (and the borders follow). */
+body.swap-sides #leftPanel { order: 3; border-right: 0; border-left: 1px solid var(--line); }
+body.swap-sides .stage { order: 2; }
+body.swap-sides #rightPanel { order: 1; border-left: 0; border-right: 1px solid var(--line); }
 .tabs { display: flex; border-bottom: 1px solid var(--line); }
 .tabs button { flex: 1; border: 0; border-radius: 0; background: transparent; padding: 10px 4px; color: var(--muted); border-bottom: 2px solid transparent; font-size: 12px; }
 .tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
@@ -78,7 +82,27 @@ body.advanced .workspace { grid-template-columns: 250px 1fr 340px; }
 .transport .play { width: 44px; background: var(--accent); color: #111; border-color: var(--accent); }
 .timecode { font-variant-numeric: tabular-nums; font-family: ui-monospace, Menlo, monospace; color: var(--muted); min-width: 120px; text-align: center; }
 #scrub { flex: 1; }
-#timeline { width: 100%; height: 120px; display: block; background: var(--panel); border-top: 1px solid var(--line); cursor: pointer; }
+#timeline { width: 100%; height: 120px; display: block; background: var(--panel); cursor: pointer; }
+#tlWrap { position: relative; border-top: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
+#tlScroll { overflow-y: auto; overflow-x: hidden; min-height: 0; flex: 1; }
+body.tl-top #tlWrap { border-top: 0; border-bottom: 1px solid var(--line); }
+/* Stage pieces in order; with the timeline on top it moves above the preview. */
+.stage > .stage-toolbar { order: 0; } .stage > .viewport { order: 2; } .stage > .transport { order: 3; } .stage > .phase-tip { order: 4; } .stage > #keyBar { order: 5; } .stage > #tlWrap { order: 6; }
+body.tl-top .stage > #keyBar { order: 1; } body.tl-top .stage > #tlWrap { order: 1; }
+/* Panel edges you can drag to resize */
+.gutter { position: absolute; z-index: 20; background: transparent; transition: background .12s; }
+.gutter:hover, .gutter.drag { background: var(--accent); opacity: .6; }
+.gutter.v { top: 0; bottom: 0; width: 6px; cursor: col-resize; }
+.gutter.h { left: 0; right: 0; height: 6px; cursor: row-resize; }
+.gutter.edge-r { right: -3px; } .gutter.edge-l { left: -3px; } .gutter.edge-t { top: -3px; } .gutter.edge-b { bottom: -3px; }
+.dock-grip { font-size: 10px; color: var(--muted); padding: 2px 8px; cursor: grab; user-select: none; letter-spacing: .04em; border-bottom: 1px solid var(--line); background: var(--panel2); }
+.dock-grip:hover { color: var(--text); }
+.panel > .dock-grip { flex: none; }
+/* Drop zones shown while dragging a panel */
+.dock-zone { position: fixed; z-index: 1000; border: 2px dashed var(--accent); background: #f59e0b22; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: var(--accent); font-weight: 600; font-size: 12px; pointer-events: none; }
+.dock-zone.hot { background: #f59e0b55; color: #111; }
+body.docking, body.docking * { cursor: grabbing !important; }
+body.resizing, body.resizing * { user-select: none !important; }
 
 dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--text); padding: 0; width: 520px; }
 dialog::backdrop { background: #000a; }

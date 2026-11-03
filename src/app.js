@@ -188,6 +188,10 @@
   // Top layer first, like the After Effects timeline.
   const tracks = () => Engine.layerOrder(state).slice().reverse().map((k) => [k, layerName(k), layerColor(k)]);
   const keyLabels = {};
+  // Panel sizes and positions (see Panel layout), kept between launches.
+  const LAYOUT_KEY = 'thirdline:layout';
+  let panelLayout = {};
+  try { panelLayout = JSON.parse(localStorage.getItem(LAYOUT_KEY) || '{}') || {}; } catch {}
   let selKey = null; // { path, k } (k = keyframe object): the one shown in the key bar
   let selKeys = []; // every selected keyframe ({ path, k }), selKey included
   const isSelKey = (k) => selKeys.some((s) => s.k === k);
@@ -1696,6 +1700,97 @@
   }
   new ResizeObserver(fitFrame).observe(viewport);
 
+  // ---------- Panel layout: drag edges to resize, drag a panel's grip to move it ----------
+  const saveLayout = () => { try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(panelLayout)); } catch {} };
+  const ws = $('.workspace'), stage = $('.stage'), tlWrap = $('#tlWrap');
+  function applyLayout() {
+    const L = panelLayout;
+    document.body.classList.toggle('swap-sides', !!L.swap);
+    document.body.classList.toggle('tl-top', !!L.tlTop);
+    // Grid tracks follow the panels when they swap sides.
+    const lw = L.lw ? `${L.lw}px` : `var(--lw-def)`, rw = L.rw ? `${L.rw}px` : `var(--rw-def)`;
+    ws.style.gridTemplateColumns = L.swap ? `${rw} minmax(0, 1fr) ${lw}` : `${lw} minmax(0, 1fr) ${rw}`;
+    tlWrap.style.height = L.tlh ? `${L.tlh}px` : '';
+    tlWrap.style.maxHeight = L.tlh ? 'none' : '50%';
+    tlWrap.style.flex = 'none';
+    lGut.className = `gutter v ${L.swap ? 'edge-l' : 'edge-r'}`;
+    rGut.className = `gutter v ${L.swap ? 'edge-r' : 'edge-l'}`;
+    tGut.className = `gutter h ${L.tlTop ? 'edge-b' : 'edge-t'}`;
+    $('#btnResetLayout').disabled = !Object.keys(L).length;
+  }
+  function gutter(parent, onDrag) {
+    const g = el('div', { class: 'gutter' });
+    g.addEventListener('pointerdown', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      g.setPointerCapture(e.pointerId); g.classList.add('drag'); document.body.classList.add('resizing');
+      const start = onDrag.start();
+      const move = (ev) => { onDrag.move(start, ev.clientX - e.clientX, ev.clientY - e.clientY); applyLayout(); fitFrame(); if (advanced) resizeTimeline(); };
+      const up = () => { g.removeEventListener('pointermove', move); g.classList.remove('drag'); document.body.classList.remove('resizing'); saveLayout(); };
+      g.addEventListener('pointermove', move);
+      g.addEventListener('pointerup', up, { once: true });
+    });
+    g.addEventListener('dblclick', () => { onDrag.reset(); applyLayout(); saveLayout(); fitFrame(); if (advanced) resizeTimeline(); });
+    parent.append(g);
+    return g;
+  }
+  const clampW = (w) => Math.round(Math.max(200, Math.min(window.innerWidth * 0.45, w)));
+  // Which way a drag widens a sidebar depends on the side it is on.
+  const lGut = gutter($('#leftPanel'), {
+    start: () => $('#leftPanel').getBoundingClientRect().width,
+    move: (w0, dx) => { panelLayout.lw = clampW(w0 + (panelLayout.swap ? -dx : dx)); },
+    reset: () => { delete panelLayout.lw; },
+  });
+  const rGut = gutter($('#rightPanel'), {
+    start: () => $('#rightPanel').getBoundingClientRect().width,
+    move: (w0, dx) => { panelLayout.rw = clampW(w0 + (panelLayout.swap ? dx : -dx)); },
+    reset: () => { delete panelLayout.rw; },
+  });
+  const tGut = gutter(tlWrap, {
+    start: () => tlWrap.getBoundingClientRect().height,
+    move: (h0, dx, dy) => { panelLayout.tlh = Math.round(Math.max(60, Math.min(stage.clientHeight - 180, h0 + (panelLayout.tlTop ? dy : -dy)))); },
+    reset: () => { delete panelLayout.tlh; },
+  });
+  // Grips: drag a sidebar to the other side, or the timeline above / below the preview.
+  for (const id of ['leftPanel', 'rightPanel']) {
+    $(`#${id}`).prepend(el('div', { class: 'dock-grip', 'data-dock': id, title: 'Drag to the other side to swap the panels · drag the inner edge to resize' }, '⋮⋮'));
+  }
+  function startDock(e, what) {
+    e.preventDefault();
+    const grip = e.currentTarget;
+    grip.setPointerCapture(e.pointerId);
+    document.body.classList.add('docking');
+    const zones = [];
+    const zone = (r, label, apply) => { const z = el('div', { class: 'dock-zone' }, label); Object.assign(z.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` }); document.body.append(z); zones.push({ z, r, apply }); };
+    const W = ws.getBoundingClientRect();
+    if (what === 'timeline') {
+      const S = stage.getBoundingClientRect(), hh = Math.min(160, S.height / 3);
+      zone({ left: S.left + 8, top: S.top + 8, width: S.width - 16, height: hh }, 'Timeline on top', () => { panelLayout.tlTop = true; });
+      zone({ left: S.left + 8, top: S.bottom - hh - 8, width: S.width - 16, height: hh }, 'Timeline at the bottom', () => { delete panelLayout.tlTop; });
+    } else {
+      const onLeft = (what === 'leftPanel') !== !!panelLayout.swap;
+      const wz = Math.min(260, W.width / 4);
+      const swapTo = (left) => () => { const wantSwap = what === 'leftPanel' ? !left : left; if (wantSwap) panelLayout.swap = true; else delete panelLayout.swap; };
+      zone({ left: W.left + 8, top: W.top + 8, width: wz, height: W.height - 16 }, onLeft ? 'Keep on the left' : 'Move to the left', swapTo(true));
+      zone({ left: W.right - wz - 8, top: W.top + 8, width: wz, height: W.height - 16 }, onLeft ? 'Move to the right' : 'Keep on the right', swapTo(false));
+    }
+    const hot = (ev) => zones.find(({ r }) => ev.clientX >= r.left && ev.clientX <= r.left + r.width && ev.clientY >= r.top && ev.clientY <= r.top + r.height);
+    const move = (ev) => { const h = hot(ev); zones.forEach((z) => z.z.classList.toggle('hot', z === h)); };
+    const up = (ev) => {
+      grip.removeEventListener('pointermove', move);
+      const h = hot(ev);
+      zones.forEach((z) => z.z.remove());
+      document.body.classList.remove('docking');
+      if (h) { h.apply(); applyLayout(); saveLayout(); fitFrame(); if (advanced) resizeTimeline(); }
+    };
+    grip.addEventListener('pointermove', move);
+    grip.addEventListener('pointerup', up, { once: true });
+  }
+  document.querySelectorAll('.dock-grip').forEach((g) => g.addEventListener('pointerdown', (e) => startDock(e, g.dataset.dock || g.parentElement.dataset.dock)));
+  function resetLayout() { panelLayout = {}; saveLayout(); applyLayout(); fitFrame(); if (advanced) resizeTimeline(); toast('Panel layout reset'); }
+  $('#btnResetLayout').onclick = () => { $('#fileMenu').hidden = true; resetLayout(); };
+  new ResizeObserver(() => { if (advanced && panelLayout.tlh) resizeTimeline(); }).observe($('#tlScroll'));
+  applyLayout();
+
   function drawPreview() {
     noteLayout();
     if (preview.width !== state.comp.width || preview.height !== state.comp.height) { preview.width = state.comp.width; preview.height = state.comp.height; fitFrame(); }
@@ -1855,7 +1950,8 @@
     const rows = timelineRows();
     TL.left = advanced ? 150 : 86;
     const last = rows[rows.length - 1];
-    const hgt = Math.max(120, Math.ceil(last.y + last.h + 22));
+    // With a timeline height set by dragging its edge, the canvas fills it; otherwise it fits the rows.
+    const hgt = Math.max(120, Math.ceil(last.y + last.h + 22), panelLayout.tlh ? $('#tlScroll').clientHeight : 0);
     if (tl.style.height !== `${hgt}px`) { tl.style.height = `${hgt}px`; tl.width = 0; }
     drawTimeline();
   }
@@ -2650,7 +2746,7 @@
   api.project.onOpenPath(async (p) => { if (!confirmDiscard()) return; const r = await api.project.read(p); if (r) loadProjectText(r.text, r.path); });
   api.onMenu((cmd) => ({
     new: newProject, open: openProject, save: () => saveProject(false), saveAs: () => saveProject(true),
-    export: () => $('#btnExport').click(), undo, redo, batch: openBatch, live: openLive, mogrt: () => openMogrt(), updates: () => checkUpdates(true),
+    export: () => $('#btnExport').click(), undo, redo, batch: openBatch, live: openLive, mogrt: () => openMogrt(), updates: () => checkUpdates(true), resetLayout: () => resetLayout(),
   })[cmd]?.());
   $('#btnNew').onclick = newProject;
   $('#btnOpen').onclick = openProject;

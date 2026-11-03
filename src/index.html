@@ -23,6 +23,7 @@
         <button id="btnBatch">Batch export from a spreadsheet (CSV)…</button>
         <button id="btnLiveMenu">Live output for OBS…</button>
         <hr />
+        <button id="btnResetLayout">Reset panel layout</button>
         <button id="btnUpdates">Check for updates…</button>
       </div>
     </div>
@@ -134,7 +135,10 @@
         <button id="kbPrev" title="Previous keyframe (J)">◀◆</button><button id="kbNext" title="Next keyframe (K)">◆▶</button>
         <button id="kbDelete" title="Delete keyframe (Delete)">Delete</button>
       </div>
-      <canvas id="timeline" class="adv-only" height="120"></canvas>
+      <div id="tlWrap" class="adv-only dockable" data-dock="timeline">
+        <div class="dock-grip" title="Drag to move the timeline above or below the preview · drag the edge to resize">⋮⋮ Timeline</div>
+        <div id="tlScroll"><canvas id="timeline" height="120"></canvas></div>
+      </div>
     </section>
 
     <aside class="panel" id="rightPanel">
