@@ -7,7 +7,7 @@ const { chromium } = require('playwright');
   p.on('console', (m) => m.type() === 'error' && errs.push(m.text()));
   await p.goto('file://' + require('path').resolve(__dirname, '../src/index.html'));
   await p.waitForTimeout(800);
-  await p.click('#modeAdv'); await p.evaluate(() => document.querySelectorAll('#inspector .section.collapsed').forEach((x) => x.classList.remove('collapsed')));
+  await p.click('#modeAdv'); await p.evaluate(() => { document.querySelector('#inspector').dataset.tab = 'all'; }); await p.evaluate(() => document.querySelectorAll('#inspector .section.collapsed').forEach((x) => x.classList.remove('collapsed')));
   await p.click('.layer-row[data-layer=title]');
   await p.evaluate(() => window.__l3rd.setTime(0.5));
   await p.locator('#inspector > div:not([hidden]) select').filter({ has: p.locator('option[value=rise]') }).selectOption('rise');

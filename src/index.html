@@ -40,6 +40,7 @@
     <input type="checkbox" id="optAdvanced" hidden />
     <button id="btnUndo" class="icon" title="Undo (Ctrl/Cmd+Z)">↶</button>
     <button id="btnRedo" class="icon" title="Redo (Ctrl/Cmd+Shift+Z)">↷</button>
+    <button id="btnLive" class="live-btn" title="Send this lower third to OBS as a browser source">● Go live</button>
     <button id="btnExport" class="primary">Export…</button>
   </header>
 
@@ -50,8 +51,11 @@
           <div class="styles" id="styleGallery"></div>
         </div>
       </div>
+      <div class="adv-only ptabs" id="leftTabs">
+        <button data-ltab="layers" class="on">Layers</button><button data-ltab="anims">Animations</button><button data-ltab="styles">Styles</button>
+      </div>
       <div class="adv-only scroll" id="advLeft">
-        <div class="pane">
+        <div class="pane" data-lpane="layers">
           <h3>Layers <span class="spacer"></span>
             <span class="menu-wrap"><button id="btnAddLayer" class="link">+ Add</button>
               <div class="dropdown" id="addMenu" hidden>
@@ -68,47 +72,73 @@
           <div id="layerList" class="layer-list"></div>
           <div class="sub">Drag to reorder. Click the eye to hide a layer.</div>
         </div>
-        <div class="pane">
+        <div class="pane" data-lpane="anims" hidden>
           <h3>Animation presets</h3>
           <div id="animLib" class="lib"></div>
           <div class="sub">Click to use as the selected layer’s <b>in</b> animation, Shift+click for <b>out</b>.</div>
+        </div>
+        <div class="pane" data-lpane="styles" hidden>
+          <h3>Styles</h3>
+          <div id="advStyles"></div>
+          <div class="sub">Starting points. Picking one replaces the look but keeps your text.</div>
         </div>
       </div>
     </aside>
 
     <section class="stage">
       <div class="stage-toolbar">
-        <label class="lbl">Preview on</label>
-        <select id="bgMode">
-          <option value="checker">Checkerboard</option>
-          <option value="dark">Black</option>
-          <option value="mid">Grey</option>
-          <option value="light">White</option>
-          <option value="green">Green screen</option>
-          <option value="custom">Colour…</option>
-          <option value="footage">My footage or photo…</option>
-        </select>
-        <input type="file" id="bgFile" accept="image/*,video/*" hidden />
-        <input type="color" id="bgColor" value="#1e3a8a" hidden title="Preview background colour" />
-        <label class="chk"><input type="checkbox" id="optSafe" checked /> Safe areas</label>
-        <label class="chk adv-only"><input type="checkbox" id="optBounds" /> Bounds</label>
-        <label class="chk adv-only" title="Motion blur (applied when exporting)"><input type="checkbox" id="optMB" /> Motion blur</label>
-        <select id="zoomSel" title="Preview zoom · Option/Alt+scroll or pinch to zoom, scroll or Space+drag to move around">
-          <option value="fit">Fit</option><option value="0.25">25%</option><option value="0.5">50%</option><option value="1">100%</option><option value="2">200%</option><option value="4">400%</option>
-        </select>
+        <span class="selchip adv-only" id="selChip"></span>
+        <span class="pen-tip" id="penTip" hidden></span>
         <span class="quick-align" id="quickAlign" title="Line up the selected layers (in Easy, or with nothing selected: the title, subtitle and extras)">
           <span class="lbl">Align</span>
           <button type="button" data-align="left" title="Align left">⇤</button><button type="button" data-align="centerH" title="Centre">↔</button><button type="button" data-align="right" title="Align right">⇥</button>
-          <button type="button" data-align="middle" class="adv-only" title="Centre vertically">↕</button>
+          <button type="button" data-align="top" class="adv-only" title="Align tops">⤒</button><button type="button" data-align="middle" class="adv-only" title="Centre vertically">↕</button><button type="button" data-align="bottom" class="adv-only" title="Align bottoms">⤓</button>
         </span>
+        <span class="bar-parent adv-only" id="barParent" title="Follow another layer’s position, rotation and scale (like parenting in After Effects)"><span class="lbl">Parent</span><select id="parentSel"></select></span>
         <span class="spacer"></span>
-        <button id="btnLive" class="live-btn" title="Send this lower third to OBS as a browser source">● Go live</button>
+        <span class="menu-wrap">
+          <button id="btnView" class="ghost" title="Preview background, safe areas and other guides">View ▾</button>
+          <div class="dropdown view-menu" id="viewMenu" hidden>
+            <label class="vrow"><span>Preview on</span>
+              <select id="bgMode">
+                <option value="checker">Checkerboard</option>
+                <option value="dark">Black</option>
+                <option value="mid">Grey</option>
+                <option value="light">White</option>
+                <option value="green">Green screen</option>
+                <option value="custom">Colour…</option>
+                <option value="footage">My footage or photo…</option>
+              </select>
+              <input type="color" id="bgColor" value="#1e3a8a" hidden title="Preview background colour" />
+            </label>
+            <input type="file" id="bgFile" accept="image/*,video/*" hidden />
+            <label class="chk vrow"><input type="checkbox" id="optSafe" checked /> Safe areas</label>
+            <label class="chk vrow adv-only"><input type="checkbox" id="optBounds" /> Layer bounds</label>
+            <label class="chk vrow adv-only" title="Motion blur (applied when exporting)"><input type="checkbox" id="optMB" /> Motion blur</label>
+          </div>
+        </span>
+        <select id="zoomSel" title="Preview zoom · Option/Alt+scroll or pinch to zoom, scroll or Space+drag to move around">
+          <option value="fit">Fit</option><option value="0.25">25%</option><option value="0.5">50%</option><option value="1">100%</option><option value="2">200%</option><option value="4">400%</option>
+        </select>
       </div>
       <div class="viewport" id="viewport">
         <div class="frame" id="frame">
           <div class="frame-bg" id="frameBg"></div>
           <video id="bgVideo" muted loop playsinline hidden></video>
           <canvas id="preview"></canvas>
+        </div>
+        <div class="toolrail adv-only" id="toolRail">
+          <button data-tool="select" class="on" title="Select and move (V)"><svg viewBox="0 0 24 24" width="18" height="18"><path d="M5 3l14 8-6 1.5L10 19z" fill="currentColor"/></svg></button>
+          <button data-tool="pen" title="Pen: click points to draw a shape, drag for curves (P)"><svg viewBox="0 0 24 24" width="18" height="18"><path d="M12 3l6 9-6 9-6-9z" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/></svg></button>
+          <button data-tool="penMask" title="Mask pen: draw a mask on the selected layer (Shift+P)"><svg viewBox="0 0 24 24" width="18" height="18"><rect x="4" y="5" width="16" height="14" rx="3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-dasharray="3 2"/><path d="M12 8l3 4-3 4-3-4z" fill="currentColor"/></svg></button>
+          <hr />
+          <button data-addtool="rect" title="Add a rectangle"><svg viewBox="0 0 24 24" width="18" height="18"><rect x="4" y="6" width="16" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></button>
+          <button data-addtool="ellipse" title="Add a circle"><svg viewBox="0 0 24 24" width="18" height="18"><ellipse cx="12" cy="12" rx="8" ry="7" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></button>
+          <button data-addtool="line" title="Add a line"><svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 18L20 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+          <button data-addtool="text" title="Add text"><svg viewBox="0 0 24 24" width="18" height="18"><path d="M5 5h14v3h-2V7h-4v11h2v2H9v-2h2V7H7v1H5z" fill="currentColor"/></svg></button>
+          <button data-addtool="image" title="Add a logo or image"><svg viewBox="0 0 24 24" width="18" height="18"><rect x="4" y="5" width="16" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M4 16l5-5 4 4 3-3 4 4" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></button>
+          <hr />
+          <button data-tool="hand" title="Hand: drag to move around a zoomed preview (H, or hold Space)"><svg viewBox="0 0 24 24" width="18" height="18"><path d="M8 12V6a1.5 1.5 0 013 0v5m0-6a1.5 1.5 0 013 0v6m0-5a1.5 1.5 0 013 0v7c0 4-2.5 6-6 6s-5-2-7-5l-1-2a1.4 1.4 0 012.3-1.5L8 14" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></button>
         </div>
         <div class="drop-hint" id="dropHint" hidden>Drop a video or photo to preview over it</div>
       </div>

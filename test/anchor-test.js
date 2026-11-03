@@ -8,7 +8,7 @@ const { chromium } = require('playwright');
   p.on('pageerror', (e) => errs.push(e.message));
   await p.goto('file://' + require('path').resolve(__dirname, '../src/index.html'));
   await p.waitForTimeout(900);
-  await p.click('#modeAdv');
+  await p.click('#modeAdv'); await p.evaluate(() => { document.querySelector('#inspector').dataset.tab = 'all'; });
   await p.evaluate(() => { window.__l3rd.selectLayer('backdrop'); window.__l3rd.setTime(3); });
   await p.waitForTimeout(200);
   const bbox = () => p.evaluate(() => {

@@ -53,13 +53,13 @@ const { chromium } = require('playwright');
   await p.keyboard.press('Escape'); await p.mouse.click(5, 900);
   // Text animators: add one to the title, right-click it → Copy, paste onto subtitle's animator section
   await L(() => window.__l3rd.selectLayer('title'));
-  const addSel = p.locator('.section:visible', { hasText: 'Text animators' }).locator('select').first();
+  await p.locator('#inspector > div:not([hidden]) [data-itab="motion"]').click(); const addSel = p.locator('.section:visible', { hasText: 'Text animators' }).locator('select').first();
   await addSel.evaluate((s) => { s.value = s.options[1].value; s.dispatchEvent(new Event('change')); });
   await p.waitForTimeout(200);
   await L(() => window.__l3rd.render());
   await p.locator('.section:visible', { hasText: 'Text animators' }).first().evaluate((sec) => { sec.classList.remove('collapsed', 'folded'); sec.querySelectorAll('[hidden]').forEach((x) => x.hidden = false); });
   const head = p.locator('.animator:visible').first();
-  await head.evaluate((e) => e.scrollIntoView());
+  await head.evaluate((e) => e.scrollIntoView({ block: 'center' }));
   const hb = await head.boundingBox();
   await p.mouse.click(hb.x + 20, hb.y + 8, { button: 'right' });
   await menu('Copy this animator');

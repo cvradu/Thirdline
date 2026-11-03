@@ -249,6 +249,10 @@
       const A = hexToRgb(a), B = hexToRgb(b);
       return '#' + A.map((c, i) => Math.round(c + (B[i] - c) * f).toString(16).padStart(2, '0')).join('');
     }
+    // Paths: point by point, when both keys have the same number of points.
+    if (Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((p) => p && typeof p === 'object')) {
+      return a.map((p, i) => { const q = b[i], o = { ...p }; for (const k of Object.keys(p)) if (typeof p[k] === 'number' && typeof q[k] === 'number') o[k] = p[k] + (q[k] - p[k]) * f; return o; });
+    }
     return f < 1 ? a : b;
   }
   function valueAtKeys(ks, t) {
@@ -504,15 +508,118 @@
   }
 
   // ---------- Backdrop drawing ----------
+  // rad: one radius, or [topLeft, topRight, bottomRight, bottomLeft].
   function roundRectPath(ctx, x, y, w, h, rad) {
-    const r = Math.max(0, Math.min(rad, w / 2, h / 2));
+    const R = Array.isArray(rad) ? rad : [rad, rad, rad, rad];
+    const [tl, tr, br, bl] = R.map((r) => Math.max(0, Math.min(r || 0, w / 2, h / 2)));
     ctx.beginPath();
-    ctx.moveTo(x + r, y);
-    ctx.arcTo(x + w, y, x + w, y + h, r);
-    ctx.arcTo(x + w, y + h, x, y + h, r);
-    ctx.arcTo(x, y + h, x, y, r);
-    ctx.arcTo(x, y, x + w, y, r);
+    ctx.moveTo(x + tl, y);
+    ctx.arcTo(x + w, y, x + w, y + h, tr);
+    ctx.arcTo(x + w, y + h, x, y + h, br);
+    ctx.arcTo(x, y + h, x, y, bl);
+    ctx.arcTo(x, y, x + w, y, tl);
     ctx.closePath();
+  }
+  // A layer's corner rounding: its radius, or each corner on its own when "corners" is switched on.
+  function cornerRadii(ly, fallback) {
+    const c = ly && ly.corners;
+    if (c && c.on) return [c.tl || 0, c.tr || 0, c.br || 0, c.bl || 0];
+    return fallback ?? (ly && ly.radius) ?? 0;
+  }
+
+  // ---------- Pen paths ----------
+  // A path is a list of points { x, y, ix, iy, ox, oy, r }: (ix, iy) / (ox, oy) are the in / out
+  // bezier handles relative to the point (0, 0 = none) and r rounds a sharp corner.
+  // Paths are flattened to polylines so corner rounding and trim (draw-on) work the same everywhere.
+  function pathPolys(pts, closed, trim) {
+    const n = pts ? pts.length : 0;
+    if (n < 2) return [];
+    const P = pts.map((p) => ({ x: +p.x || 0, y: +p.y || 0, ix: +p.ix || 0, iy: +p.iy || 0, ox: +p.ox || 0, oy: +p.oy || 0, r: +p.r || 0 }));
+    const sharp = (p) => !p.ix && !p.iy && !p.ox && !p.oy;
+    const prev = (i) => (i > 0 ? P[i - 1] : closed ? P[n - 1] : null), next = (i) => (i < n - 1 ? P[i + 1] : closed ? P[0] : null);
+    // Where each corner's rounding starts (E) and ends (X).
+    const E = [], X = [];
+    P.forEach((p, i) => {
+      const a = prev(i), b = next(i);
+      if (p.r > 0 && sharp(p) && a && b) {
+        const d1 = [a.x - p.x, a.y - p.y], d2 = [b.x - p.x, b.y - p.y];
+        const l1 = Math.hypot(...d1), l2 = Math.hypot(...d2);
+        if (l1 > 1e-6 && l2 > 1e-6) {
+          const u1 = [d1[0] / l1, d1[1] / l1], u2 = [d2[0] / l2, d2[1] / l2];
+          const th = Math.acos(Math.max(-1, Math.min(1, u1[0] * u2[0] + u1[1] * u2[1])));
+          if (th > 0.01 && th < Math.PI - 0.01) {
+            const t = Math.min(p.r / Math.tan(th / 2), l1 / 2, l2 / 2);
+            E[i] = [p.x + u1[0] * t, p.y + u1[1] * t]; X[i] = [p.x + u2[0] * t, p.y + u2[1] * t];
+            return;
+          }
+        }
+      }
+      E[i] = X[i] = [p.x, p.y];
+    });
+    const out = [];
+    const push = (x, y) => { const l = out[out.length - 1]; if (!l || Math.abs(l[0] - x) > 1e-6 || Math.abs(l[1] - y) > 1e-6) out.push([x, y]); };
+    const cubic = (a, c1, c2, b) => {
+      const len = Math.hypot(c1[0] - a[0], c1[1] - a[1]) + Math.hypot(c2[0] - c1[0], c2[1] - c1[1]) + Math.hypot(b[0] - c2[0], b[1] - c2[1]);
+      const N = Math.max(2, Math.min(64, Math.ceil(len / 6)));
+      for (let k = 1; k <= N; k++) {
+        const t = k / N, u = 1 - t;
+        push(u * u * u * a[0] + 3 * u * u * t * c1[0] + 3 * u * t * t * c2[0] + t * t * t * b[0], u * u * u * a[1] + 3 * u * u * t * c1[1] + 3 * u * t * t * c2[1] + t * t * t * b[1]);
+      }
+    };
+    // Rounded corner: an arc-like curve from E past the corner to X.
+    const corner = (i) => {
+      const p = P[i], e = E[i], x = X[i];
+      if (e[0] === x[0] && e[1] === x[1]) return;
+      const k = 0.5523 * 1.0;
+      cubic(e, [e[0] + (p.x - e[0]) * k, e[1] + (p.y - e[1]) * k], [x[0] + (p.x - x[0]) * k, x[1] + (p.y - x[1]) * k], x);
+    };
+    push(...X[0]);
+    const segs = closed ? n : n - 1;
+    for (let i = 0; i < segs; i++) {
+      const a = P[i], j = (i + 1) % n, b = P[j];
+      const h1 = a.ox || a.oy, h2 = b.ix || b.iy;
+      if (!h1 && !h2) push(...E[j]);
+      else cubic(X[i], h1 ? [a.x + a.ox, a.y + a.oy] : X[i], h2 ? [b.x + b.ix, b.y + b.iy] : E[j], E[j]);
+      corner(j);
+    }
+    if (!trim) return [out];
+    // Trim: keep the part between start and end (in % of the length), shifted by offset.
+    let s = (trim.start ?? 0) / 100, e = (trim.end ?? 100) / 100;
+    if (s > e) [s, e] = [e, s];
+    if (e - s >= 0.9999) return [out];
+    if (e - s <= 0.0001) return [];
+    const off = (trim.offset ?? 0) / 100;
+    s += off; e += off;
+    const cum = [0];
+    for (let i = 1; i < out.length; i++) cum.push(cum[i - 1] + Math.hypot(out[i][0] - out[i - 1][0], out[i][1] - out[i - 1][1]));
+    const L = cum[cum.length - 1];
+    if (L <= 0) return [];
+    const at = (d) => {
+      let i = 1; while (i < cum.length - 1 && cum[i] < d) i++;
+      const f = Math.max(0, Math.min(1, (d - cum[i - 1]) / Math.max(1e-9, cum[i] - cum[i - 1])));
+      return [out[i - 1][0] + (out[i][0] - out[i - 1][0]) * f, out[i - 1][1] + (out[i][1] - out[i - 1][1]) * f];
+    };
+    const piece = (a, b) => {
+      const da = a * L, db = b * L, poly = [at(da)];
+      for (let i = 0; i < out.length; i++) if (cum[i] > da && cum[i] < db) poly.push(out[i]);
+      poly.push(at(db));
+      return poly;
+    };
+    if (!closed) { const a = Math.max(0, Math.min(1, s)), b = Math.max(0, Math.min(1, e)); return b - a > 1e-4 ? [piece(a, b)] : []; }
+    const a = s - Math.floor(s), b = a + (e - s);
+    return b <= 1 ? [piece(a, b)] : [piece(a, 1), piece(0, b - 1)];
+  }
+  function tracePolys(ctx, polys, closeIt) {
+    ctx.beginPath();
+    for (const poly of polys) { poly.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); if (closeIt) ctx.closePath(); }
+  }
+  // Bounds of a path's points and handles.
+  function pathBounds(pts) {
+    if (!pts || !pts.length) return { x: 0, y: 0, w: 0, h: 0 };
+    const xs = [], ys = [];
+    for (const p of pts) { xs.push(p.x, p.x + (p.ix || 0), p.x + (p.ox || 0)); ys.push(p.y, p.y + (p.iy || 0), p.y + (p.oy || 0)); }
+    const x = Math.min(...xs), y = Math.min(...ys);
+    return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };
   }
   // ---------- Backdrop fills: solid, linear, radial, 4-point, with optional animation ----------
   const GRADIENT_TYPES = { solid: 'Solid colour', linear: 'Linear gradient', radial: 'Radial gradient', fourPoint: '4-point gradient' };
@@ -709,8 +816,8 @@
     const rect = (x, y, w, h) => () => { ctx.beginPath(); ctx.rect(x, y, w, h); };
     const rr = (x, y, w, h, r) => () => roundRectPath(ctx, x, y, w, h, r);
     switch (bd.shape) {
-      case 'rect': paintFill(ctx, bd, b, rect(b.x, b.y, b.w, b.h)); break;
-      case 'rounded': paintFill(ctx, bd, b, rr(b.x, b.y, b.w, b.h, bd.radius)); break;
+      case 'rect': paintFill(ctx, bd, b, bd.corners && bd.corners.on ? rr(b.x, b.y, b.w, b.h, cornerRadii(bd)) : rect(b.x, b.y, b.w, b.h)); break;
+      case 'rounded': paintFill(ctx, bd, b, rr(b.x, b.y, b.w, b.h, cornerRadii(bd))); break;
       case 'pill': paintFill(ctx, bd, b, rr(b.x, b.y, b.w, b.h, b.h / 2)); break;
       case 'slant': {
         const s = bd.skew;
@@ -723,10 +830,10 @@
         break;
       }
       case 'accent': {
-        paintFill(ctx, bd, b, rr(b.x, b.y, b.w, b.h, bd.radius));
+        paintFill(ctx, bd, b, rr(b.x, b.y, b.w, b.h, cornerRadii(bd)));
         ctx.shadowColor = 'transparent';
         ctx.fillStyle = bd.accentColor;
-        ctx.save(); roundRectPath(ctx, b.x, b.y, b.w, b.h, bd.radius); ctx.clip();
+        ctx.save(); roundRectPath(ctx, b.x, b.y, b.w, b.h, cornerRadii(bd)); ctx.clip();
         ctx.fillRect(b.x, b.y, bd.accentWidth, b.h); ctx.restore();
         break;
       }
@@ -937,8 +1044,9 @@
   }
   function maskPath(c, m) {
     c.beginPath();
+    if (m.shape === 'path') { tracePolys(c, pathPolys((m.points || []).map((p) => ({ ...p, x: p.x + m.x, y: p.y + m.y })), true), true); return; }
     if (m.shape === 'ellipse') c.ellipse(m.x + m.w / 2, m.y + m.h / 2, Math.max(0, m.w / 2), Math.max(0, m.h / 2), 0, 0, Math.PI * 2);
-    else if (m.radius > 0) roundRectPath(c, m.x, m.y, m.w, m.h, m.radius);
+    else if (m.radius > 0 || (m.corners && m.corners.on)) roundRectPath(c, m.x, m.y, m.w, m.h, cornerRadii(m));
     else c.rect(m.x, m.y, m.w, m.h);
   }
   // Draws a layer through its mask (if enabled) using an offscreen buffer.
@@ -966,7 +1074,7 @@
   // ---------- Extra layers (logo, shapes, more text) ----------
   // state.layers = { id: layer }, state.order = bottom→top list of ids (backdrop/title/subtitle included).
   const EXTRA_KINDS = { text: 'Text', image: 'Logo / image', shape: 'Shape', group: 'Group' };
-  const EXTRA_SHAPES = { rect: 'Rectangle', rounded: 'Rounded rectangle', ellipse: 'Circle / ellipse', line: 'Line' };
+  const EXTRA_SHAPES = { rect: 'Rectangle', rounded: 'Rounded rectangle', ellipse: 'Circle / ellipse', line: 'Line', path: 'Custom (pen)' };
   function getLayer(state, id) { return id === 'backdrop' || id === 'title' || id === 'subtitle' ? state[id] : state.layers && state.layers[id]; }
   function layerOrder(state) {
     const base = ['backdrop', 'title', 'subtitle'];
@@ -1012,6 +1120,13 @@
         if (!img) continue;
         w = ly.w || 160;
         h = img.complete && img.naturalWidth ? (w * img.naturalHeight) / img.naturalWidth : ly.h || w;
+      } else if (ly.shape === 'path') {
+        // Points are relative to the layer's origin (its x / y against the frame or backdrop box).
+        if (!ly.points || ly.points.length < 2) continue;
+        const pb = pathBounds(ly.points), pad = ly.stroke && ly.stroke.on ? (ly.stroke.width || 0) / 2 : 0;
+        const ox = ref.x + ref.w * (ly.ax ?? 0) + (ly.x || 0), oy = ref.y + ref.h * (ly.ay ?? 0) + (ly.y || 0);
+        out[id] = { x: ox + pb.x - pad, y: oy + pb.y - pad, w: Math.max(1, pb.w + pad * 2), h: Math.max(1, pb.h + pad * 2), ox, oy };
+        continue;
       } else {
         if (!w) w = ref.w; // 0 = match the backdrop box
         if (!h) h = ref.h;
@@ -1057,11 +1172,23 @@
     } else {
       ctx.fillStyle = ly.color || '#ffffff';
       ctx.beginPath();
-      if (ly.shape === 'ellipse') ctx.ellipse(b.x + b.w / 2, b.y + b.h / 2, b.w / 2, b.h / 2, 0, 0, Math.PI * 2);
-      else if (ly.shape === 'rounded' || ly.shape === 'line') roundRectPath(ctx, b.x, b.y, b.w, b.h, ly.shape === 'line' ? b.h / 2 : ly.radius || 0);
-      else ctx.rect(b.x, b.y, b.w, b.h);
-      ctx.fill();
-      if (ly.stroke && ly.stroke.on && ly.stroke.width > 0) { ctx.shadowColor = 'transparent'; ctx.lineWidth = ly.stroke.width; ctx.strokeStyle = ly.stroke.color; ctx.stroke(); }
+      if (ly.shape === 'path') {
+        const polys = pathPolys((ly.points || []).map((p) => ({ ...p, x: p.x + b.ox, y: p.y + b.oy })), !!ly.closed, ly.trim);
+        const full = !ly.trim || ((ly.trim.start ?? 0) <= 0 && (ly.trim.end ?? 100) >= 100);
+        const filled = ly.fill !== false && ly.closed;
+        tracePolys(ctx, polys, ly.closed && full);
+        if (filled) ctx.fill();
+        if (ly.stroke && ly.stroke.on && ly.stroke.width > 0) {
+          if (filled) ctx.shadowColor = 'transparent';
+          ctx.lineWidth = ly.stroke.width; ctx.strokeStyle = ly.stroke.color; ctx.lineCap = ly.stroke.cap || 'round'; ctx.lineJoin = 'round'; ctx.stroke();
+        }
+      } else {
+        if (ly.shape === 'ellipse') ctx.ellipse(b.x + b.w / 2, b.y + b.h / 2, b.w / 2, b.h / 2, 0, 0, Math.PI * 2);
+        else if (ly.shape === 'rounded' || ly.shape === 'line' || (ly.corners && ly.corners.on)) roundRectPath(ctx, b.x, b.y, b.w, b.h, ly.shape === 'line' ? b.h / 2 : cornerRadii(ly));
+        else ctx.rect(b.x, b.y, b.w, b.h);
+        ctx.fill();
+        if (ly.stroke && ly.stroke.on && ly.stroke.width > 0) { ctx.shadowColor = 'transparent'; ctx.lineWidth = ly.stroke.width; ctx.strokeStyle = ly.stroke.color; ctx.stroke(); }
+      }
     }
     layerBlur = 0;
     ctx.restore();
@@ -1224,7 +1351,7 @@
       backdrop: state.backdrop.type === 'none' || state.backdrop.visible === false ? null : { ...L.box },
     };
     const eb = L.extras || {};
-    for (const [id, b] of Object.entries(eb)) if (state.layers[id] && state.layers[id].visible !== false) out[id] = { x: b.x, y: b.y, w: b.w, h: b.h };
+    for (const [id, b] of Object.entries(eb)) if (state.layers[id] && state.layers[id].visible !== false) out[id] = { x: b.x, y: b.y, w: b.w, h: b.h, ...(b.ox !== undefined ? { ox: b.ox, oy: b.oy } : {}) };
     for (const k of Object.keys(out)) if (out[k]) { out[k].tr = { ...NO_TR, ...((getLayer(state, k) || {}).transform || {}) }; out[k].parents = parentFrames(state, L, k); if ((getLayer(state, k) || {}).kind === 'group') out[k].group = true; }
     return out;
   }
@@ -1341,8 +1468,8 @@
   }
 
   global.Engine = {
-    BACKDROP_ANIMS, TEXT_ANIMS, LOOP_TYPES, loopAt, SHAPES, GRADIENT_TYPES, GRADIENT_ANIMS, BLEND_MODES, EXTRA_KINDS, EXTRA_SHAPES, getLayer, layerOrder,
-    render, renderFrame, computeLayout, layoutAt, bleed, pivotOf, anchorScreen, parentChain, parentFrames, toParentSpace, fromParentSpace, screenRect, measureLine, fitTextSizes, extraBoxes, PER_CHAR, PER_WORD, OUT_SWAP, phaseAt, timingSpans, imagesReady, getImage, hitTest, resolveAt, valueAtKeys, selectorAmount,
+    BACKDROP_ANIMS, TEXT_ANIMS, LOOP_TYPES, loopAt, pathPolys, pathBounds, cornerRadii, SHAPES, GRADIENT_TYPES, GRADIENT_ANIMS, BLEND_MODES, EXTRA_KINDS, EXTRA_SHAPES, getLayer, layerOrder,
+    render, renderFrame, computeLayout, layoutAt, bleed, pivotOf, fwdPt, invPt, anchorScreen, parentChain, parentFrames, toParentSpace, fromParentSpace, screenRect, measureLine, fitTextSizes, extraBoxes, PER_CHAR, PER_WORD, OUT_SWAP, phaseAt, timingSpans, imagesReady, getImage, hitTest, resolveAt, valueAtKeys, selectorAmount,
     set onImageLoad(fn) { onImageLoad = fn; },
   };
 })(typeof window !== 'undefined' ? window : globalThis);

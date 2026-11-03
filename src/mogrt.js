@@ -839,6 +839,7 @@
       const prefix = `layers.${id}`;
       const eb = L.extras[id];
       if (!eb) return;
+      if (ly.kind === 'shape' && ly.shape === 'path') { markHandled(prefix); return; } // pen shapes: not exported yet (warned below)
       if (ly.kind === 'text') {
         textLayer(id, ly, prefix, eb.line, { kind: 'text', name: ly.name || 'Text', label: ly.name || 'Text' });
         Object.assign(CFG.L[id], { kind: 'text', attach: ly.attach, ax: ly.ax ?? 0, ay: ly.ay ?? 0, x: ly.x || 0, y: ly.y || 0, textH: eb.h, ascent: eb.line.ascent });
@@ -913,6 +914,12 @@
     // Keyframes we could not carry over.
     const skipped = Object.keys(keys).filter((p) => keys[p] && keys[p].length && !handled.has(p));
     if (skipped.length) warn(`These animated values were exported at their mid-hold value: ${skipped.join(', ')}.`);
+    for (const id of Engine.layerOrder(st)) {
+      const l = Engine.getLayer(st, id); if (!l) continue;
+      if (l.kind === 'shape' && l.shape === 'path') warn(`Pen shape “${l.name || 'Shape'}” is left out of the .mogrt for now; export a MOV to keep it.`);
+      if (l.mask && l.mask.enabled && l.mask.shape === 'path') warn(`${l.name || id}: pen-drawn masks are exported as a rectangle mask.`);
+      if ((l.corners && l.corners.on) || (l.mask && l.mask.corners && l.mask.corners.on)) warn(`${l.name || id}: separate corner rounding uses the first corner’s radius in After Effects.`);
+    }
     if (st.layout.align === 'justify') warn('Justified text keeps its letter spacing when edited; it won’t re-justify.');
 
     // Responsive time: protect the in and out animations so Premiere stretches only the hold.

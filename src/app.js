@@ -387,7 +387,10 @@
     $('#optAdvanced').checked = on;
     $('#modeEasy').classList.toggle('on', !on); $('#modeAdv').classList.toggle('on', on);
     try { localStorage.setItem('thirdline:advanced', on ? '1' : '0'); } catch {}
-    if (!on) { (selKey = null, selKeys = []); selPreset = null; }
+    if (!on) { (selKey = null, selKeys = []); selPreset = null; if (typeof setTool === 'function' && tool !== 'select') setTool('select'); }
+    // The style gallery lives in Easy's first step, or the Styles tab in Advanced.
+    const gal = $('#styleGallery');
+    if (gal) (on ? $('#advStyles') : $('#easyLeft .step')).append(gal);
     resizeTimeline();
     if (typeof fitFrame === 'function') requestAnimationFrame(fitFrame);
     if (!on) refreshGallery();
@@ -773,7 +776,8 @@
         row({ label: 'Accent size', type: 'range', path: 'backdrop.accentWidth', key: true, min: 1, max: 60, unit: 'px', show: shapeIn('accent', 'underline', 'sideBar', 'corners') }),
         row({ label: 'Accent gap', type: 'range', path: 'backdrop.accentGap', min: 0, max: 80, unit: 'px', show: shapeIn('accent', 'underline', 'sideBar') }),
         row({ label: 'Opacity', type: 'range', path: 'backdrop.opacity', key: true, min: 0, max: 100, scale: 100, unit: '%', show: (s) => s.backdrop.type !== 'none' }),
-        row({ label: 'Corner radius', type: 'range', path: 'backdrop.radius', key: true, min: 0, max: 80, unit: 'px', show: shapeIn('rounded', 'accent', 'twoTone') }),
+        row({ label: 'Corner radius', type: 'range', path: 'backdrop.radius', key: true, min: 0, max: 80, unit: 'px', show: (s) => shapeIn('rounded', 'accent', 'twoTone')(s) && !(s.backdrop.corners && s.backdrop.corners.on) }),
+        ...cornerRows('backdrop', shapeIn('rect', 'rounded', 'accent')),
         row({ label: 'Slant', type: 'range', path: 'backdrop.skew', key: true, min: 0, max: 120, unit: 'px', show: shapeIn('slant') }),
       ]),
       section('Image backdrop', [
@@ -955,6 +959,16 @@
     return g;
   }
 
+  // Each corner on its own (one rounded corner, two, …). base = path of the object holding radius/corners.
+  function cornerRows(base, show, label = 'Corners') {
+    const on = (s) => show(s) && !!getPath(state, `${base}.corners.on`);
+    const c = (k, l) => row({ label: l, type: 'range', path: `${base}.corners.${k}`, key: true, min: 0, max: 200, unit: 'px', show: on });
+    return [
+      row({ label, type: 'checkbox', path: `${base}.corners.on`, text: 'Round each corner separately', show,
+        onSet: (v) => { if (v) { const r = getPath(state, `${base}.radius`) || 0; for (const k of ['tl', 'tr', 'br', 'bl']) if (!getPath(state, `${base}.corners.${k}`)) setPath(state, `${base}.corners.${k}`, r); } changed({ sync: true }); } }),
+      c('tl', '↖ Top left'), c('tr', '↗ Top right'), c('br', '↘ Bottom right'), c('bl', '↙ Bottom left'),
+    ];
+  }
   // Right-click an In/Out section to copy or paste that animation.
   function animCtx(key, dir, sec) {
     sec.addEventListener('contextmenu', (e) => {
@@ -1066,12 +1080,16 @@
     const sec = section(`${name} · Mask`, [
       el('div', { class: 'sub' }, 'Only the part of the layer inside the mask is visible (or outside, when inverted). Keyframe its position and size to build custom reveals. The cyan outline shows the mask when the layer is selected.'),
       row({ label: 'Mask', type: 'checkbox', path: mp('enabled'), text: 'Enable mask' }),
-      row({ label: 'Shape', type: 'select', path: mp('shape'), options: { rect: 'Rectangle', ellipse: 'Ellipse' }, show: on }),
+      row({ label: 'Shape', type: 'select', path: mp('shape'), options: { rect: 'Rectangle', ellipse: 'Ellipse', path: 'Drawn with the pen' }, show: on,
+        onSet: (v) => { if (v === 'path' && !(lay(key).mask.points || []).length) { const m = lay(key).mask; m.points = [[0, 0], [m.w, 0], [m.w, m.h], [0, m.h]].map(([x, y]) => ({ x, y, ix: 0, iy: 0, ox: 0, oy: 0, r: 0 })); } changed({ sync: true }); } }),
+      row({ label: '', type: 'buttons', buttons: [['✎ Draw mask with the pen', () => { selectLayer(key); setTool('penMask'); }, 'Click points on the preview; click the first point to close (Shift+P)']] }),
       row({ label: 'X', type: 'range', path: mp('x'), key: true, keyLabel: 'Mask X', min: -500, max: 4000, unit: 'px', show: on }),
       row({ label: 'Y', type: 'range', path: mp('y'), key: true, keyLabel: 'Mask Y', min: -500, max: 2500, unit: 'px', show: on }),
-      row({ label: 'Width', type: 'range', path: mp('w'), key: true, keyLabel: 'Mask width', min: 0, max: 4000, unit: 'px', show: on }),
-      row({ label: 'Height', type: 'range', path: mp('h'), key: true, keyLabel: 'Mask height', min: 0, max: 2500, unit: 'px', show: on }),
-      row({ label: 'Corner radius', type: 'range', path: mp('radius'), key: true, keyLabel: 'Mask radius', min: 0, max: 400, unit: 'px', show: (s) => on(s) && lay(key).mask.shape === 'rect' }),
+      row({ label: 'Width', type: 'range', path: mp('w'), key: true, keyLabel: 'Mask width', min: 0, max: 4000, unit: 'px', show: (s) => on(s) && lay(key).mask.shape !== 'path' }),
+      row({ label: 'Height', type: 'range', path: mp('h'), key: true, keyLabel: 'Mask height', min: 0, max: 2500, unit: 'px', show: (s) => on(s) && lay(key).mask.shape !== 'path' }),
+      row({ label: 'Corner radius', type: 'range', path: mp('radius'), key: true, keyLabel: 'Mask radius', min: 0, max: 400, unit: 'px', show: (s) => on(s) && lay(key).mask.shape === 'rect' && !(lay(key).mask.corners && lay(key).mask.corners.on) }),
+      ...cornerRows(`${pp(key)}.mask`, (s) => on(s) && lay(key).mask.shape === 'rect'),
+      ...pathRows(key, true, (s) => on(s) && lay(key).mask.shape === 'path'),
       row({ label: 'Feather', type: 'range', path: mp('feather'), key: true, keyLabel: 'Mask feather', min: 0, max: 120, unit: 'px', show: on }),
       row({ label: 'Invert', type: 'checkbox', path: mp('invert'), text: 'Show outside the mask', show: on }),
       row({ label: 'Quick', type: 'buttons', buttons: [
@@ -1226,7 +1244,7 @@
   function builtinPane(key) {
     const [transform, mask, animators, inSec, outSec, motion] = (() => { const a = animPanel(key); return key === 'backdrop' ? [a[0], a[1], null, a[2], a[3], a[4]] : a; })();
     const content = key === 'backdrop' ? backdropPanel() : [(sectionRefs[key] = textSection(key, 'Text')), effectsSection(key)];
-    return [inspHead(key), transform, ...content, mask, animators, inSec, outSec, motion].filter(Boolean).map(foldable);
+    return [inspHead(key), inspTabs(), transform, ...content, mask, animators, inSec, outSec, motion].filter(Boolean).map(foldable).map(tagTab);
   }
   // Placement of an extra layer: relative to the backdrop box or the whole frame.
   function placementSection(id) {
@@ -1247,6 +1265,62 @@
       row({ label: 'Offset Y', type: 'range', path: p('y'), min: -1080, max: 1080, unit: 'px' }),
     ]);
   }
+  // Pen paths (shape layers and masks): close / open, the selected point's roundness, animate shape.
+  function pathRows(key, mask, show) {
+    const ptsP = mask ? `${pp(key)}.mask.points` : `layers.${key}.points`;
+    const selOn = (s) => show(s) && selPoint && selPoint.key === key && !!selPoint.mask === !!mask;
+    return [
+      !mask ? row({ label: 'Path', type: 'checkbox', path: `layers.${key}.closed`, text: 'Closed', show }) : null,
+      row({ label: 'Points', type: 'custom', show, render: (ctl) => {
+        const info = el('span', { class: 'sub' });
+        ctl.append(el('div', { style: 'flex:1' }, info));
+        return () => { const n = ((mask ? lay(key)?.mask?.points : lay(key)?.points) || []).length; info.textContent = `${n} points · drag them on the preview · Alt+drag pulls curves · Delete removes the selected one`; };
+      } }),
+      row({ label: 'Point corner', type: 'custom', show: selOn, render: (ctl) => {
+        const r = el('input', { type: 'range', min: 0, max: 200, step: 1 }), n = el('input', { type: 'number', min: 0, max: 400, step: 1 });
+        const set = (v) => { const pts = ptsNow(key, mask); if (!pts[selPoint.i]) return; pts[selPoint.i].r = Math.max(0, +v || 0); writePts(key, mask, pts); changed({ record: true }); };
+        r.addEventListener('input', () => { n.value = r.value; set(r.value); }); n.addEventListener('input', () => { r.value = n.value; set(n.value); });
+        ctl.append(r, n, el('span', { class: 'unit' }, 'px'));
+        return () => { const pts = valueNow(ptsP) || []; const p = selPoint && pts[selPoint.i]; const v = p ? p.r || 0 : 0; r.value = v; if (document.activeElement !== n) n.value = v; };
+      } }),
+      row({ label: 'All corners', type: 'custom', show, render: (ctl) => {
+        const r = el('input', { type: 'range', min: 0, max: 200, step: 1 });
+        r.addEventListener('input', () => { const pts = ptsNow(key, mask).map((p) => ({ ...p, r: +r.value })); writePts(key, mask, pts); changed(); });
+        ctl.append(r);
+        return () => { const pts = valueNow(ptsP) || []; r.value = pts.length && pts.every((p) => (p.r || 0) === (pts[0].r || 0)) ? pts[0].r || 0 : 0; };
+      } }),
+      row({ label: '', type: 'custom', show, render: (ctl) => {
+        const b = el('button', { type: 'button', title: 'Keyframe the shape of the path: move points at another time and it morphs between them' });
+        b.onclick = () => {
+          if (isKeyed(ptsP)) { const i = keyIndexAt(ptsP, time); if (i >= 0) removeKey(ptsP, keysOf(ptsP)[i]); else setKey(ptsP, time, clone(valueNow(ptsP))); }
+          else { setKey(ptsP, time, clone(getPath(state, ptsP) || [])); toast('Path keyframed · move the playhead, then drag points to morph'); }
+          changed({ sync: true });
+        };
+        ctl.append(b);
+        return () => { const k = isKeyed(ptsP); b.textContent = k ? (keyIndexAt(ptsP, time) >= 0 ? '◆ Remove path keyframe here' : '◇ Add path keyframe here') : '◆ Animate shape'; b.classList.toggle('on', k); };
+      } }),
+    ].filter(Boolean);
+  }
+  // A rectangle / ellipse / line turned into editable points.
+  function shapeToPath(id) {
+    const ly = lay(id), b = lastLayout && lastLayout.layers && lastLayout.layers[id];
+    if ((ly.points || []).length >= 2 || !b) { ly.shape = 'path'; return; }
+    const W = b.w, H = b.h, k = 0.5523;
+    let pts;
+    if (ly.shape === 'ellipse') pts = [[W / 2, 0, W / 2 * k, 0], [W, H / 2, 0, H / 2 * k], [W / 2, H, -W / 2 * k, 0], [0, H / 2, 0, -H / 2 * k]].map(([x, y, hx, hy]) => ({ x, y, ox: hx, oy: hy, ix: -hx, iy: -hy, r: 0 }));
+    else { const r = ly.shape === 'rounded' ? ly.radius || 0 : 0; pts = [[0, 0], [W, 0], [W, H], [0, H]].map(([x, y]) => ({ x, y, ix: 0, iy: 0, ox: 0, oy: 0, r })); }
+    // Keep it where it was: origin = the old box's top-left in the same frame / box space.
+    const ref = ly.attach === 'frame' ? { x: 0, y: 0, w: state.comp.width, h: state.comp.height } : lastLayout.box;
+    Object.assign(ly, { shape: 'path', points: pts.map((p) => ({ ...p, x: Math.round(p.x), y: Math.round(p.y), ix: Math.round(p.ix), iy: Math.round(p.iy), ox: Math.round(p.ox), oy: Math.round(p.oy) })), closed: true, fill: true,
+      x: Math.round(b.x - ref.x - ref.w * (ly.ax ?? 0)), y: Math.round(b.y - ref.y - ref.h * (ly.ay ?? 0)) });
+  }
+  function drawOnPreset(id) {
+    const P = `layers.${id}.trim.end`, t0 = fpsT(time), t1 = fpsT(Math.min(state.comp.duration, time + 0.8));
+    state.keys ??= {};
+    state.keys[P] = [{ t: t0, v: 0, e: 'easeInOutCubic' }, { t: t1, v: 100, e: 'easeInOutCubic' }];
+    if (!lay(id).stroke.on) lay(id).stroke.on = true;
+    changed({ sync: true }); toast('Draw-on keyframed from the playhead');
+  }
   function extraPane(id) {
     const ly = lay(id), p = (k) => `layers.${id}.${k}`;
     let content;
@@ -1256,7 +1330,7 @@
       return [inspHead(id), section('Group', [
         el('div', { class: 'sub' }, 'Everything in this group moves, scales, rotates, fades and animates with it. Give it an In/Out animation to animate them all at once. Add or remove layers with their Parent setting.'),
         row({ label: '', type: 'buttons', buttons: [['Ungroup', () => ungroup(id), 'Put the layers back on their own (Shift+Cmd/Ctrl+G)']] }),
-      ]), transform, ...rest].filter(Boolean).map(foldable);
+      ]), transform, ...rest].filter(Boolean).map(foldable).map(tagTab).flatMap((x, i) => (i === 0 ? [x, inspTabs()] : [x]));
     }
     if (ly.kind === 'text') content = [textSection(id, 'Text'), effectsSection(id)];
     else if (ly.kind === 'image') content = [section('Logo / image', [
@@ -1269,21 +1343,29 @@
       row({ label: 'Opacity', type: 'range', path: p('opacity'), key: true, min: 0, max: 100, scale: 100, unit: '%' }),
     ])];
     else content = [section('Shape', [
-      row({ label: 'Shape', type: 'select', path: p('shape'), options: Engine.EXTRA_SHAPES }),
-      row({ label: 'Colour', type: 'color', path: p('color'), key: true }),
-      row({ label: 'Width', type: 'range', path: p('w'), key: true, min: 0, max: 1920, unit: 'px' }),
-      row({ label: 'Height', type: 'range', path: p('h'), key: true, min: 0, max: 1080, unit: 'px' }),
-      el('div', { class: 'sub' }, 'Width or height 0 = match the lower third box.'),
-      row({ label: 'Corner radius', type: 'range', path: p('radius'), key: true, min: 0, max: 200, unit: 'px', show: () => lay(id) && lay(id).shape === 'rounded' }),
+      row({ label: 'Shape', type: 'select', path: p('shape'), options: Engine.EXTRA_SHAPES, onSet: (v) => { if (v === 'path') shapeToPath(id); changed({ sync: true }); } }),
+      row({ label: 'Fill', type: 'checkbox', path: p('fill'), text: 'Fill the inside', show: () => isPathLayer(id) }),
+      row({ label: 'Colour', type: 'color', path: p('color'), key: true, show: () => !isPathLayer(id) || lay(id).fill !== false }),
+      row({ label: 'Width', type: 'range', path: p('w'), key: true, min: 0, max: 1920, unit: 'px', show: () => !isPathLayer(id) }),
+      row({ label: 'Height', type: 'range', path: p('h'), key: true, min: 0, max: 1080, unit: 'px', show: () => !isPathLayer(id) }),
+      row({ label: '', type: 'custom', show: () => !isPathLayer(id), render: (ctl) => { ctl.append(el('span', { class: 'sub', style: 'margin:0' }, 'Width or height 0 = match the lower third box.')); } }),
+      row({ label: 'Corner radius', type: 'range', path: p('radius'), key: true, min: 0, max: 200, unit: 'px', show: () => lay(id) && lay(id).shape === 'rounded' && !lay(id).corners?.on }),
+      ...cornerRows(`layers.${id}`, () => lay(id) && ['rect', 'rounded'].includes(lay(id).shape)),
+      ...pathRows(id, false, () => isPathLayer(id)),
       row({ label: 'Opacity', type: 'range', path: p('opacity'), key: true, min: 0, max: 100, scale: 100, unit: '%' }),
-      row({ label: 'Outline', type: 'checkbox', path: p('stroke.on'), text: 'On' }),
-      row({ label: 'Outline width', type: 'range', path: p('stroke.width'), min: 0.5, max: 20, step: 0.5, unit: 'px', show: () => lay(id) && lay(id).stroke.on }),
-      row({ label: 'Outline colour', type: 'color', path: p('stroke.color'), swatches: false, show: () => lay(id) && lay(id).stroke.on }),
+      row({ label: 'Stroke', type: 'checkbox', path: p('stroke.on'), text: 'On' }),
+      row({ label: 'Stroke width', type: 'range', path: p('stroke.width'), key: true, min: 0.5, max: 60, step: 0.5, unit: 'px', show: () => lay(id) && lay(id).stroke.on }),
+      row({ label: 'Stroke colour', type: 'color', path: p('stroke.color'), key: true, swatches: false, show: () => lay(id) && lay(id).stroke.on }),
+      row({ label: 'Line ends', type: 'select', path: p('stroke.cap'), options: { round: 'Round', square: 'Square', butt: 'Flat' }, show: () => isPathLayer(id) && lay(id).stroke.on }),
+      row({ label: 'Draw on', type: 'range', path: p('trim.end'), key: true, keyLabel: 'Trim end', min: 0, max: 100, step: 0.5, unit: '%', show: () => isPathLayer(id), title: 'Trim path end: keyframe 0 → 100% to draw the line on' }),
+      row({ label: 'Trim start', type: 'range', path: p('trim.start'), key: true, min: 0, max: 100, step: 0.5, unit: '%', show: () => isPathLayer(id) }),
+      row({ label: 'Trim offset', type: 'range', path: p('trim.offset'), key: true, min: -100, max: 100, step: 0.5, unit: '%', show: () => isPathLayer(id) }),
+      row({ label: '', type: 'buttons', show: () => isPathLayer(id), buttons: [['✎ Draw on from the playhead', () => drawOnPreset(id), 'Keyframe the stroke drawing itself on over 0.8s']] }),
       row({ label: 'Shadow', type: 'checkbox', path: p('shadow.on'), text: 'On' }),
     ])];
     const a = animPanel(id);
     const [transform, mask, ...rest] = a;
-    return [inspHead(id), transform, ...content, placementSection(id), mask, ...rest].filter(Boolean).map(foldable);
+    return [inspHead(id), inspTabs(), transform, ...content, placementSection(id), mask, ...rest].filter(Boolean).map(foldable).map(tagTab);
   }
   function showInspector(key) {
     for (const [k, pane] of Object.entries(inspPanes)) pane.hidden = k !== (key && !isExtra(key) ? key : key ? '__extra' : 'comp');
@@ -1421,6 +1503,52 @@
     (selKey = null, selKeys = []); selPreset = null;
     changed({ sync: true }); selectLayer(null);
   }
+  // Left panel tabs (Advanced): Layers · Animations · Styles
+  function setLeftTab(t) {
+    document.querySelectorAll('#leftTabs [data-ltab]').forEach((b) => b.classList.toggle('on', b.dataset.ltab === t));
+    document.querySelectorAll('#advLeft [data-lpane]').forEach((p) => { p.hidden = p.dataset.lpane !== t; });
+    if (t === 'styles') refreshGallery();
+    try { localStorage.setItem('thirdline:leftTab', t); } catch {}
+  }
+  document.querySelectorAll('#leftTabs [data-ltab]').forEach((b) => b.addEventListener('click', () => setLeftTab(b.dataset.ltab)));
+  try { const t = localStorage.getItem('thirdline:leftTab'); if (t) setLeftTab(t); } catch {}
+  // View menu (preview background, guides)
+  $('#btnView').onclick = (e) => { e.stopPropagation(); $('#viewMenu').hidden = !$('#viewMenu').hidden; };
+  document.addEventListener('pointerdown', (e) => { if (!$('#viewMenu').hidden && !e.target.closest('#viewMenu') && !e.target.closest('#btnView')) $('#viewMenu').hidden = true; });
+  // Selection bar above the preview: what's selected, align, parent.
+  function syncSelBar() {
+    const chip = $('#selChip'); if (!chip) return;
+    const n = multiSel.length;
+    chip.innerHTML = '';
+    if (n > 1) chip.append(el('b', {}, `${n} layers`));
+    else if (selected && lay(selected)) chip.append(el('i', { style: `background:${layerColor(selected) || '#8a93a6'}` }), el('b', {}, layerName(selected)));
+    else chip.append(el('span', { class: 'lbl' }, 'Nothing selected'));
+    const ps = $('#parentSel'), bp = $('#barParent');
+    bp.hidden = !(selected && lay(selected) && n <= 1);
+    if (!bp.hidden) {
+      const bad = descendantsOf(selected);
+      fillSelect(ps, [['', 'None'], ...tracks().filter(([k]) => !bad.has(k)).map(([k, nm]) => [k, nm])]);
+      ps.value = lay(selected).parent || '';
+    }
+  }
+  $('#parentSel').addEventListener('change', (e) => { if (selected) setParent(selected, e.target.value); syncSelBar(); });
+  addStructureSync(syncSelBar);
+  // Inspector tabs (Advanced): Style · Motion · Position. Each section belongs to one tab.
+  let inspTab = 'style';
+  try { inspTab = localStorage.getItem('thirdline:inspTab') || 'style'; } catch {}
+  const TAB_OF = (name) => (/Transform|Placement/.test(name) ? 'position' : /· In$|· Out$|While on screen|Text animators|^Motion$/.test(name) ? 'motion' : 'style');
+  function tagTab(sec) {
+    const h = sec.querySelector && sec.querySelector(':scope > h3');
+    if (h && sec.classList.contains('section')) sec.dataset.tab = TAB_OF(h.firstChild ? h.firstChild.textContent : h.textContent);
+    return sec;
+  }
+  function setInspTab(t) {
+    inspTab = t;
+    $('#inspector').dataset.tab = t;
+    document.querySelectorAll('#inspector [data-itab]').forEach((b) => b.classList.toggle('on', b.dataset.itab === t));
+    try { localStorage.setItem('thirdline:inspTab', t); } catch {}
+  }
+  const inspTabs = () => el('div', { class: 'itabs' }, ...[['style', 'Style'], ['motion', 'Motion'], ['position', 'Position']].map(([k, l]) => el('button', { type: 'button', 'data-itab': k, class: k === inspTab ? 'on' : '', onclick: () => setInspTab(k) }, l)));
   $('#btnAddLayer').onclick = (e) => { e.stopPropagation(); $('#addMenu').hidden = !$('#addMenu').hidden; };
   $('#addMenu').addEventListener('click', (e) => { const b = e.target.closest('[data-add]'); if (!b) return; $('#addMenu').hidden = true; addLayer(b.dataset.add); });
   function renderAnimLib() {
@@ -1458,6 +1586,11 @@
   let selected = null;
   const sectionRefs = {};
   // Shift/Cmd-click in the layer list or the preview adds layers to the selection (for Align).
+  // Pen tool state (see the pen section)
+  let tool = 'select'; // 'select' | 'pen' | 'penMask'
+  let penDraft = null; // { target: 'layer' | 'mask', key, dragging }
+  let selPoint = null; // { key, i, mask }
+  let ptDrag = null;
   let multiSel = [];
   function toggleMulti(k) {
     if (!k) return;
@@ -1469,10 +1602,12 @@
   function selectLayer(k, { reveal = true, keepMulti = false } = {}) {
     if (k && !lay(k)) k = null;
     if (!keepMulti) multiSel = k ? [k] : [];
+    if (selPoint && selPoint.key !== k) selPoint = null;
     selected = k;
     document.querySelectorAll('.layer-row').forEach((r) => r.classList.toggle('multi', multiSel.length > 1 && multiSel.includes(r.dataset.layer)));
     document.querySelectorAll('.layer-row').forEach((r) => r.classList.toggle('on', r.dataset.layer === k));
     showInspector(k);
+    syncSelBar();
     if (reveal === 'focus' && !advanced) {
       const inp = k === 'title' ? $('#ezTitle') : k === 'subtitle' ? $('#ezSub') : null;
       if (inp) { inp.focus(); inp.select(); }
@@ -1987,7 +2122,7 @@
   // Preview zoom: 'fit' or a scale (1 = 100%: one video pixel per screen pixel), plus a pan offset.
   const pview = { z: 'fit', px: 0, py: 0 };
   function fitScale() {
-    const vw = viewport.clientWidth - 32, vh = viewport.clientHeight - 32;
+    const vw = viewport.clientWidth - 32 - (advanced ? 104 : 0), vh = viewport.clientHeight - 32;
     return Math.max(0.01, Math.min(vw / state.comp.width, vh / state.comp.height));
   }
   const viewScale = () => (pview.z === 'fit' ? fitScale() : pview.z);
@@ -2039,7 +2174,7 @@
   // Pan: hold Space and drag, or drag with the middle mouse button.
   let spaceHeld = false, spacePanned = false, panDrag = null;
   viewport.addEventListener('pointerdown', (e) => {
-    if (!(spaceHeld || e.button === 1)) return;
+    if (!(spaceHeld || e.button === 1 || (tool === 'hand' && e.button === 0))) return;
     e.preventDefault(); e.stopImmediatePropagation();
     if (pview.z === 'fit') { pview.z = fitScale(); }
     panDrag = { x: e.clientX, y: e.clientY, px: pview.px, py: pview.py };
@@ -2154,6 +2289,7 @@
     const mbOpts = mb && mb.enabled && mb.preview && !dragging ? { samples: Math.min(mb.samples, playing ? 4 : 8) } : { noMotionBlur: true };
     lastLayout = Engine.renderFrame(pctx, state, time, { guides: true, safeAreas: view.safeAreas, bounds: view.bounds || dragging, selected, also: advanced && multiSel.length > 1 ? multiSel : null, anchor: advanced, ...mbOpts });
     if (advanced && selected) drawMotionPath();
+    drawPenOverlay();
     const fps = state.comp.fps;
     const f = Math.round(time * fps);
     $('#timecode').textContent = `${time.toFixed(2)}s · f${f} / ${Math.round(state.comp.duration * fps)}`;
@@ -2161,6 +2297,250 @@
     drawPhaseBar();
   }
   Engine.onImageLoad = () => { drawPreview(); syncControls(); };
+
+
+  // ---------- Pen tool: draw shapes and masks point by point, then edit points ----------
+  // Shape layers with shape 'path' keep points { x, y, ix, iy, ox, oy, r } relative to their origin.
+  // Masks with shape 'path' keep points relative to the mask's x / y.
+  const isPathLayer = (k) => !!(k && isExtra(k) && lay(k).kind === 'shape' && lay(k).shape === 'path');
+  const pxTol = (n) => n * (state.comp.width / preview.getBoundingClientRect().width);
+  function setTool(t) {
+    if (penDraft && t !== tool) finishPen();
+    if (t === 'penMask' && !selected) { toast('Select the layer to mask first'); t = 'select'; }
+    tool = t;
+    document.querySelectorAll('[data-tool]').forEach((b) => b.classList.toggle('on', b.dataset.tool === tool));
+    preview.style.cursor = tool === 'select' ? '' : 'crosshair';
+    viewport.classList.toggle('pen-on', tool !== 'select');
+    const tip = $('#penTip');
+    if (tip) {
+      tip.hidden = tool === 'select';
+      tip.textContent = { pen: 'Pen · click to add points · drag for curves · click the first point to close · Enter to finish',
+        penMask: `Mask pen on ${selected ? layerName(selected) : 'the layer'} · click points · click the first point to close`, hand: 'Hand · drag to move around the preview' }[tool] || '';
+    }
+    document.body.classList.toggle('tool-active', tool !== 'select');
+    preview.style.cursor = tool === 'hand' ? 'grab' : tool === 'select' ? '' : 'crosshair';
+    drawPreview();
+  }
+  document.querySelectorAll('#toolRail [data-tool]').forEach((b) => b.addEventListener('click', () => setTool(b.dataset.tool)));
+  document.querySelectorAll('#toolRail [data-addtool]').forEach((b) => b.addEventListener('click', () => { setTool('select'); addLayer(b.dataset.addtool); }));
+  // Where a path's points live on screen, and back.
+  function pathSpace(key, mask) {
+    if (mask) {
+      const m = Engine.getLayer(Engine.resolveAt(state, time), key).mask;
+      return { fwd: (x, y) => [x + m.x, y + m.y], inv: (x, y) => [x - m.x, y - m.y], pts: m.points || [], closed: true };
+    }
+    const b = lastLayout && lastLayout.layers && lastLayout.layers[key];
+    const rs = Engine.getLayer(Engine.resolveAt(state, time), key);
+    if (!b || !rs || b.ox === undefined) return null;
+    const tr = b.tr || rs.transform || {};
+    return {
+      fwd: (x, y) => Engine.fromParentSpace(b.parents, ...Engine.fwdPt(tr, b, x + b.ox, y + b.oy)),
+      inv: (x, y) => { const [qx, qy] = Engine.toParentSpace(b.parents, x, y); const [px, py] = Engine.invPt(tr, b, qx, qy); return [px - b.ox, py - b.oy]; },
+      pts: rs.points || [], closed: !!rs.closed,
+    };
+  }
+  const ptsPath = (key, mask) => (mask ? `${pp(key)}.mask.points` : `${pp(key)}.points`);
+  const curPts = (key, mask) => clone((mask ? lay(key).mask.points : lay(key).points) || []);
+  function writePts(key, mask, pts) {
+    const path = ptsPath(key, mask);
+    if (isKeyed(path)) setKey(path, time, pts); else setPath(state, path, pts);
+  }
+  // Points as they are right now (keyframed paths at the playhead).
+  const ptsNow = (key, mask) => clone(valueNow(ptsPath(key, mask)) || []);
+  function startPen(cx, cy) {
+    if (tool === 'penMask') {
+      const m = lay(selected).mask;
+      if (!(m.enabled && m.shape === 'path' && penDraft && penDraft.key === selected)) {
+        clearKeys(`${pp(selected)}.mask.`);
+        Object.assign(m, { enabled: true, shape: 'path', x: Math.round(cx), y: Math.round(cy), points: [] });
+      }
+      penDraft = { key: selected, mask: true };
+      return;
+    }
+    const ly = Presets.newLayer('shape', { shape: 'path', name: 'Shape', attach: 'frame', ax: 0, ay: 0, x: 0, y: 0, w: 0, h: 0, points: [], closed: false, fill: false,
+      color: '#a855f7', stroke: { on: true, width: 6, color: state.backdrop.accentColor || '#f59e0b', cap: 'round' }, trim: { start: 0, end: 100, offset: 0 },
+      anim: { in: { type: 'fade' }, out: { type: 'fade' } } });
+    const id = newId();
+    state.layers = { ...(state.layers || {}), [id]: ly };
+    state.order = [...Engine.layerOrder(state).filter((x) => x !== id), id];
+    penDraft = { key: id, mask: false };
+    selectLayer(id);
+  }
+  function finishPen() {
+    const d = penDraft; penDraft = null;
+    if (!d) return;
+    const pts = d.mask ? lay(d.key).mask.points : lay(d.key) && lay(d.key).points;
+    if (!pts || pts.length < 2) {
+      if (d.mask) { lay(d.key).mask.enabled = false; lay(d.key).mask.shape = 'rect'; }
+      else deleteLayer(d.key);
+      changed({ sync: true });
+      return;
+    }
+    if (!d.mask && lay(d.key).closed) lay(d.key).fill = true;
+    changed({ sync: true });
+    toast(d.mask ? 'Mask drawn · drag its points to adjust' : 'Shape drawn · drag points to adjust, Alt+drag for curves');
+  }
+  function penDown(e) {
+    const [cx, cy] = toComp(e);
+    if (!penDraft) startPen(cx, cy);
+    const d = penDraft, sp = pathSpace(d.key, d.mask) || { inv: (x, y) => [x, y], fwd: (x, y) => [x, y] };
+    const pts = d.mask ? lay(d.key).mask.points : lay(d.key).points;
+    // Clicking the first point closes the shape.
+    if (pts.length >= 3) {
+      const [fx, fy] = sp.fwd(pts[0].x, pts[0].y);
+      if (Math.hypot(fx - cx, fy - cy) <= pxTol(10)) {
+        if (!d.mask) lay(d.key).closed = true;
+        finishPen(); return;
+      }
+    }
+    const [lx, ly] = d.mask ? [cx - lay(d.key).mask.x, cy - lay(d.key).mask.y] : sp.inv(cx, cy);
+    pts.push({ x: Math.round(lx), y: Math.round(ly), ix: 0, iy: 0, ox: 0, oy: 0, r: 0 });
+    d.dragging = { i: pts.length - 1, m: [cx, cy] };
+    changed({ record: false });
+  }
+  function penMove(e) {
+    const d = penDraft;
+    if (!d || !d.dragging) return;
+    const pts = d.mask ? lay(d.key).mask.points : lay(d.key).points;
+    const p = pts[d.dragging.i]; if (!p) return;
+    const [cx, cy] = toComp(e);
+    const sp = d.mask ? { inv: (x, y) => [x - lay(d.key).mask.x, y - lay(d.key).mask.y] } : pathSpace(d.key, false) || { inv: (x, y) => [x, y] };
+    const [lx, ly] = sp.inv(cx, cy);
+    const ox = lx - p.x, oy = ly - p.y;
+    if (Math.hypot(ox, oy) < 3) return;
+    // Dragging out of a new point pulls a smooth curve.
+    Object.assign(p, { ox: Math.round(ox), oy: Math.round(oy), ix: -Math.round(ox), iy: -Math.round(oy) });
+    drawPreview();
+  }
+  // Editing: drag a point or a handle of the selected path (shape or mask). Alt+drag on a point
+  // pulls out new curve handles; Alt+click makes it a sharp corner again.
+  function editTarget() {
+    if (!selected || !lay(selected)) return null;
+    if (isPathLayer(selected)) return { key: selected, mask: false };
+    const m = lay(selected).mask;
+    if (m && m.enabled && m.shape === 'path') return { key: selected, mask: true };
+    return null;
+  }
+  function pointHit(e) {
+    const t = editTarget(); if (!t) return null;
+    const sp = pathSpace(t.key, t.mask); if (!sp) return null;
+    const [cx, cy] = toComp(e), tol = pxTol(8);
+    const pts = sp.pts;
+    // Handles of the selected point first, then points.
+    if (selPoint && selPoint.key === t.key && selPoint.mask === t.mask && pts[selPoint.i]) {
+      const p = pts[selPoint.i];
+      for (const h of ['o', 'i']) {
+        if (!p[h + 'x'] && !p[h + 'y']) continue;
+        const [hx, hy] = sp.fwd(p.x + p[h + 'x'], p.y + p[h + 'y']);
+        if (Math.hypot(hx - cx, hy - cy) <= tol) return { ...t, i: selPoint.i, handle: h, sp };
+      }
+    }
+    for (let i = 0; i < pts.length; i++) {
+      const [px, py] = sp.fwd(pts[i].x, pts[i].y);
+      if (Math.hypot(px - cx, py - cy) <= tol) return { ...t, i, handle: null, sp };
+    }
+    return null;
+  }
+  function drawPenOverlay() {
+    const t = penDraft ? { key: penDraft.key, mask: penDraft.mask } : tool === 'select' || tool === 'pen' ? editTarget() : null;
+    if (!t || !lay(t.key)) return;
+    const sp = pathSpace(t.key, t.mask); if (!sp) return;
+    const g = pctx, lw = Math.max(1, state.comp.width / 960);
+    const pts = sp.pts;
+    g.save();
+    // Outline of the path (masks and unfilled drafts are hard to see otherwise).
+    const polys = Engine.pathPolys(pts.map((p) => { const [x, y] = sp.fwd(p.x, p.y); const [ix, iy] = sp.fwd(p.x + (p.ix || 0), p.y + (p.iy || 0)); const [ox, oy] = sp.fwd(p.x + (p.ox || 0), p.y + (p.oy || 0)); return { x, y, ix: ix - x, iy: iy - y, ox: ox - x, oy: oy - y, r: p.r }; }), t.mask || sp.closed);
+    g.strokeStyle = t.mask ? '#22d3ee' : '#c084fc'; g.lineWidth = 1.2 * lw;
+    g.beginPath(); for (const poly of polys) poly.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y))); g.stroke();
+    pts.forEach((p, i) => {
+      const [x, y] = sp.fwd(p.x, p.y);
+      const on = selPoint && selPoint.key === t.key && selPoint.mask === t.mask && selPoint.i === i;
+      if (on || (penDraft && i === pts.length - 1)) {
+        for (const h of ['i', 'o']) {
+          if (!p[h + 'x'] && !p[h + 'y']) continue;
+          const [hx, hy] = sp.fwd(p.x + p[h + 'x'], p.y + p[h + 'y']);
+          g.strokeStyle = '#c084fc'; g.lineWidth = lw; g.beginPath(); g.moveTo(x, y); g.lineTo(hx, hy); g.stroke();
+          g.fillStyle = '#c084fc'; g.beginPath(); g.arc(hx, hy, 3.5 * lw, 0, Math.PI * 2); g.fill();
+        }
+      }
+      const r = (on ? 5 : 4) * lw;
+      g.fillStyle = on ? '#a855f7' : '#ffffff'; g.strokeStyle = on ? '#ffffff' : '#a855f7'; g.lineWidth = 1.5 * lw;
+      g.fillRect(x - r, y - r, r * 2, r * 2); g.strokeRect(x - r, y - r, r * 2, r * 2);
+      if (penDraft && i === 0 && pts.length >= 3) { g.strokeStyle = '#fff'; g.beginPath(); g.arc(x, y, 9 * lw, 0, Math.PI * 2); g.stroke(); }
+    });
+    g.restore();
+  }
+  preview.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    if (tool === 'pen' || tool === 'penMask') {
+      e.stopImmediatePropagation(); preview.setPointerCapture(e.pointerId);
+      setPlaying(false);
+      // With the pen and a path selected (not drawing), grabbing a point edits it.
+      if (!penDraft) { const h = pointHit(e); if (h) { startPtDrag(e, h); return; } }
+      penDown(e); return;
+    }
+    const h = pointHit(e);
+    if (!h) { if (selPoint) { selPoint = null; syncControls(); } return; }
+    e.stopImmediatePropagation(); preview.setPointerCapture(e.pointerId);
+    startPtDrag(e, h);
+  }, true);
+  function startPtDrag(e, h) {
+    selPoint = { key: h.key, i: h.i, mask: h.mask };
+    const pts = ptsNow(h.key, h.mask);
+    if (e.altKey && !h.handle) {
+      // Alt-click a curved point: back to a sharp corner. Alt-drag: pull new handles.
+      const p = pts[h.i];
+      if (p.ix || p.iy || p.ox || p.oy) { Object.assign(p, { ix: 0, iy: 0, ox: 0, oy: 0 }); writePts(h.key, h.mask, pts); changed({ sync: true }); return; }
+      ptDrag = { ...h, pts, handle: 'o', pull: true, c: [e.clientX, e.clientY], m: toComp(e) };
+    } else ptDrag = { ...h, pts, c: [e.clientX, e.clientY], m: toComp(e), p0: { ...pts[h.i] } };
+    syncControls(); drawPreview();
+  }
+  preview.addEventListener('pointermove', (e) => {
+    if (penDraft && penDraft.dragging) { e.stopImmediatePropagation(); penMove(e); return; }
+    if (!ptDrag) {
+      if (tool === 'select' && !dragging) { const h = pointHit(e); if (h) { preview.style.cursor = h.handle ? 'pointer' : 'move'; e.stopImmediatePropagation(); } }
+      return;
+    }
+    e.stopImmediatePropagation();
+    const d = ptDrag, rr = preview.getBoundingClientRect();
+    let mx = d.m[0] + ((e.clientX - d.c[0]) / rr.width) * state.comp.width, my = d.m[1] + ((e.clientY - d.c[1]) / rr.height) * state.comp.height;
+    if (e.shiftKey && !d.handle) { if (Math.abs(mx - d.m[0]) >= Math.abs(my - d.m[1])) my = d.m[1]; else mx = d.m[0]; }
+    const pts = clone(d.pts), p = pts[d.i];
+    const [lx, ly] = d.sp.inv(mx, my);
+    if (d.handle) {
+      const hx = Math.round(lx - p.x), hy = Math.round(ly - p.y);
+      p[d.handle + 'x'] = hx; p[d.handle + 'y'] = hy;
+      // Smooth points keep both handles in line (hold Alt to break them apart).
+      const o = d.handle === 'o' ? 'i' : 'o';
+      if (d.pull || (!e.altKey && (p[o + 'x'] || p[o + 'y']))) {
+        const len = d.pull ? Math.hypot(hx, hy) : Math.hypot(p[o + 'x'], p[o + 'y']), l = Math.hypot(hx, hy) || 1;
+        p[o + 'x'] = Math.round((-hx / l) * len); p[o + 'y'] = Math.round((-hy / l) * len);
+      }
+    } else {
+      const [l0x, l0y] = d.sp.inv(...d.m);
+      p.x = Math.round(d.p0.x + lx - l0x); p.y = Math.round(d.p0.y + ly - l0y);
+    }
+    writePts(d.key, d.mask, pts);
+    changed({ record: false });
+  }, true);
+  preview.addEventListener('pointerup', (e) => {
+    if (penDraft && penDraft.dragging) { penDraft.dragging = null; e.stopImmediatePropagation(); changed({ sync: true }); return; }
+    if (ptDrag) { ptDrag = null; e.stopImmediatePropagation(); changed({ sync: true }); }
+  }, true);
+  preview.addEventListener('dblclick', (e) => { if (penDraft) { e.stopImmediatePropagation(); finishPen(); } }, true);
+  function deleteSelPoint() {
+    if (!selPoint || !lay(selPoint.key)) return false;
+    const pts = ptsNow(selPoint.key, selPoint.mask);
+    if (pts.length <= 2) { toast('A path needs at least two points'); return true; }
+    pts.splice(selPoint.i, 1);
+    // Keyframed paths: every key loses that point, so they keep morphing.
+    const path = ptsPath(selPoint.key, selPoint.mask);
+    if (isKeyed(path)) { for (const k of keysOf(path)) if (Array.isArray(k.v) && k.v.length > selPoint.i) k.v.splice(selPoint.i, 1); }
+    else setPath(state, path, pts);
+    selPoint = null;
+    changed({ sync: true });
+    return true;
+  }
 
   // ---------- Motion path (After Effects style) ----------
   // The path the selected layer's anchor point travels: a dot per frame, a square per position
@@ -3670,6 +4050,11 @@
     else if (e.key === 'ArrowLeft') $('#btnPrevFrame').click();
     else if (e.key === 'ArrowRight') $('#btnNextFrame').click();
     else if (e.key === 'Home') $('#btnStart').click();
+    else if ((e.key === 'Escape' || e.key === 'Enter') && (penDraft || tool !== 'select')) { e.preventDefault(); if (penDraft) finishPen(); else setTool('select'); }
+    else if (!mod && !e.altKey && advanced && e.key.toLowerCase() === 'p') setTool(e.shiftKey ? 'penMask' : 'pen');
+    else if (!mod && !e.altKey && e.key.toLowerCase() === 'v') setTool('select');
+    else if (!mod && !e.altKey && advanced && e.key.toLowerCase() === 'h') setTool('hand');
+    else if ((e.key === 'Delete' || e.key === 'Backspace') && selPoint && !selKey && deleteSelPoint()) e.preventDefault();
     else if (e.key === 'Escape') { (selKey = null, selKeys = []); selPreset = null; updateKeyBar(); drawTimeline(); selectLayer(null); }
     else if ((e.key === 'Delete' || e.key === 'Backspace') && selPreset) { e.preventDefault(); deletePreset(selPreset.key, selPreset.dir); }
     else if ((e.key === 'Delete' || e.key === 'Backspace') && selKey) { e.preventDefault(); deleteSelectedKeys(); }
@@ -3843,6 +4228,7 @@
   async function boot() {
     for (const f of await api.fonts.list()) await addUserFont(f);
     buildInspector();
+    setInspTab(inspTab); syncSelBar();
     buildEasyPanel();
     renderBrandMenu();
     renderLayerList(); renderAnimLib();
@@ -3860,7 +4246,7 @@
       selKeyCount: () => selKeys.length, multiSel: () => multiSel.slice(), motionPath: () => motionPath(), variantState: (st, w, h) => variantState(st, w, h),
       selectAllKeysOf: (path) => { selKeys = (state.keys[path] || []).map((k) => ({ path, k })); selKey = selKeys[selKeys.length - 1] || null; updateKeyBar(); drawTimeline(); }, selKeyTimes: () => selKeys.map((s) => s.k.t),
       tlDebug: () => { const g = tlGeom(); return { rows: timelineRows(), left: TL.left, right: TL.right, ruler: TL.ruler, w: g.w, span: g.span, t0: g.t0, z: tlView.z }; },
-      time: () => time, viewScale: () => viewScale(), pview: () => ({ ...pview }), rects: () => Object.fromEntries(Object.entries(lastLayout.layers).map(([k, b]) => [k, Engine.screenRect(b)])), playing: () => playing };
+      time: () => time, tool: () => tool, selPoint: () => selPoint, viewScale: () => viewScale(), pview: () => ({ ...pview }), rects: () => Object.fromEntries(Object.entries(lastLayout.layers).map(([k, b]) => [k, Engine.screenRect(b)])), playing: () => playing };
     setTimeout(() => checkUpdates(false).catch(() => {}), 3000);
   }
   boot();

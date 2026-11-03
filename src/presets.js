@@ -9,7 +9,7 @@
   });
 
   const transform = (text) => ({ x: 0, y: 0, scale: 100, rotation: 0, opacity: 100, blur: 0, anchorX: 50, anchorY: 50, ...(text ? { tracking: 0 } : {}) });
-  const mask = () => ({ enabled: false, shape: 'rect', x: 100, y: 760, w: 900, h: 240, radius: 0, feather: 0, invert: false });
+  const mask = () => ({ enabled: false, shape: 'rect', x: 100, y: 760, w: 900, h: 240, radius: 0, corners: { on: false, tl: 0, tr: 0, br: 0, bl: 0 }, points: [], feather: 0, invert: false });
 
   function defaultState() {
     return {
@@ -44,7 +44,7 @@
         accentColor: '#f59e0b',
         accentWidth: 10,
         accentGap: 8,
-        radius: 6,
+        radius: 6, corners: { on: false, tl: 0, tr: 0, br: 0, bl: 0 },
         skew: 28,
         padX: 36,
         padY: 22,
@@ -168,13 +168,13 @@
     const d = defaultState();
     const common = { kind, name: '', visible: true, attach: 'box', ax: 0, ay: 0, x: 0, y: 0, w: 0, h: 0, opacity: 1,
       anim: anim('fade', 'fade', { delay: 0.3, inDur: 0.4, offset: 0.1, outDur: 0.3 }), transform: transform(kind === 'text'), mask: mask(),
-      shadow: { on: false, color: '#000000', opacity: 0.5, blur: 12, offsetX: 0, offsetY: 4 }, stroke: { on: false, width: 2, color: '#ffffff' } };
+      shadow: { on: false, color: '#000000', opacity: 0.5, blur: 12, offsetX: 0, offsetY: 4 }, stroke: { on: false, width: 2, color: '#ffffff', cap: 'round' }, corners: { on: false, tl: 0, tr: 0, br: 0, bl: 0 } };
     if (kind === 'text') {
       const { stroke, shadow, ...place } = common;
       return deepMerge({ ...JSON.parse(JSON.stringify(d.subtitle)), ...place, name: 'Text', text: 'New text', size: 24, y: -40, animators: [] }, o);
     }
     if (kind === 'image') return deepMerge({ ...common, name: 'Logo', src: '', file: '', w: 120, ax: 1, ay: 0.5, x: 140, anim: anim('pop', 'fade', { delay: 0.4, inDur: 0.45, inEase: 'easeOutBack', offset: 0.1, outDur: 0.3 }) }, o);
-    return deepMerge({ ...common, name: 'Accent bar', shape: 'rect', color: '#f59e0b', radius: 0, w: 8, h: 0, ax: 0, ay: 0, x: -14, anim: anim('growY', 'growY', { inDur: 0.45, outDur: 0.35 }) }, o);
+    return deepMerge({ ...common, points: [], closed: false, fill: true, trim: { start: 0, end: 100, offset: 0 }, name: 'Accent bar', shape: 'rect', color: '#f59e0b', radius: 0, w: 8, h: 0, ax: 0, ay: 0, x: -14, anim: anim('growY', 'growY', { inDur: 0.45, outDur: 0.35 }) }, o);
   }
 
   global.Presets = {

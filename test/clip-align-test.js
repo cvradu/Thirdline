@@ -49,7 +49,7 @@ const { chromium } = require('playwright');
   await p.locator('.layer-row[data-layer=subtitle]').click({ modifiers: ['Shift'] });
   const multi = await p.evaluate(() => window.__l3rd.multiSel());
   await p.waitForTimeout(150);
-  await p.locator('#inspector > div:not([hidden]) .align-row button[title="Align left edges"]').click();
+  await p.locator('#inspector > div:not([hidden]) [data-itab="position"]').click(); await p.locator('#inspector > div:not([hidden]) .align-row button[title="Align left edges"]').click();
   await p.waitForTimeout(150);
   const rects = await p.evaluate(() => ['title', 'subtitle'].map((k) => { const L = Engine.layoutAt(document.createElement('canvas').getContext('2d'), Engine.resolveAt(window.__l3rd.state, 3)); return Engine.screenRect(L.layers[k]).x; }));
   // distribute needs 3

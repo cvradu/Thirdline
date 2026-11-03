@@ -27,7 +27,7 @@ const { chromium } = require('playwright');
   // Move the backdrop first, then parent: title must not jump
   await p.evaluate(() => { const t = window.__l3rd.state.backdrop.transform; t.x = 120; t.y = -40; window.__l3rd.render(); });
   const t0 = await bbox();
-  const picker = p.locator('select[title^="Follow another"]:visible');
+  await p.locator('#inspector > div:not([hidden]) [data-itab="position"]').click(); const picker = p.locator('select[title^="Follow another"]:visible');
   console.log('parent options', await picker.locator('option').allTextContents());
   await picker.selectOption('backdrop');
   await p.waitForTimeout(100);
@@ -47,12 +47,12 @@ const { chromium } = require('playwright');
   // Loop protection: backdrop's parent list doesn't offer the title
   await p.evaluate(() => window.__l3rd.selectLayer('backdrop'));
   await p.waitForTimeout(100);
-  const bdOpts = await p.locator('select[title^="Follow another"]:visible').first().locator('option').allTextContents();
+  await p.locator('#inspector > div:not([hidden]) [data-itab="position"]').click(); const bdOpts = await p.locator('select[title^="Follow another"]:visible').first().locator('option').allTextContents();
   const noLoop = !bdOpts.includes('Title');
   // Un-parent keeps it in place too
   await p.evaluate(() => window.__l3rd.selectLayer('title'));
   await p.waitForTimeout(100);
-  await p.locator('select[title^="Follow another"]:visible').first().selectOption('');
+  await p.locator('#inspector > div:not([hidden]) [data-itab="position"]').click(); await p.locator('select[title^="Follow another"]:visible').first().selectOption('');
   const t4 = await bbox();
   console.log({ t0, t1, tr1, t2, t3, t4, stayed, follows, rot, hit, bdOpts, noLoop, errs });
   console.log(stayed && follows && rot && hit === 'title' && noLoop && !errs.length ? 'PASS' : 'FAIL');

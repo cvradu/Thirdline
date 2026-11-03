@@ -7,7 +7,7 @@ const { chromium } = require('playwright');
   p.on('console', (m) => m.type() === 'error' && errs.push(m.text()));
   await p.goto('file://' + require('path').resolve(__dirname, '../src/index.html'));
   await p.waitForTimeout(800);
-  await p.click('#modeAdv');
+  await p.click('#modeAdv'); await p.evaluate(() => { document.querySelector('#inspector').dataset.tab = 'all'; });
   await p.click('.layer-row[data-layer=title]');
   // keyframe rotation and scale
   await p.evaluate(() => window.__l3rd.setTime(1.5));
