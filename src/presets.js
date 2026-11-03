@@ -14,6 +14,8 @@
     return {
       keys: {},
       version: 1,
+      layers: {},
+      order: ['backdrop', 'title', 'subtitle'],
       comp: { width: 1920, height: 1080, fps: 30, duration: 6, motionBlur: { enabled: false, shutter: 180, samples: 12, preview: false } },
       layout: { x: 144, y: 972, hAnchor: 'left', vAnchor: 'bottom', align: 'left', lineGap: 14 },
       backdrop: {
@@ -54,7 +56,10 @@
         text: 'Alexandra Popescu',
         font: 'Montserrat', weight: 700, italic: false, size: 56, color: '#ffffff',
         letterSpacing: 0, uppercase: false, clipToBox: true,
-        shadow: { on: false, color: '#000000', opacity: 0.6, blur: 10, offsetY: 2 },
+        stroke: { on: false, width: 2, color: '#000000' },
+        glow: { on: false, color: '#f59e0b', size: 18, opacity: 0.8, strength: 1 },
+        fitWidth: 0,
+        shadow: { on: false, color: '#000000', opacity: 0.6, blur: 10, offsetX: 0, offsetY: 2 },
         anim: anim('maskUp', 'slideDown', { delay: 0.35, inDur: 0.6, inEase: 'easeOutQuart', offset: 0.15, outDur: 0.35, distance: 60 }),
         transform: transform(true),
         mask: mask(),
@@ -64,7 +69,10 @@
         text: 'Head of Product · Studio North',
         font: 'Inter', weight: 500, italic: false, size: 30, color: '#cbd5e1',
         letterSpacing: 0.5, uppercase: false, clipToBox: true,
-        shadow: { on: false, color: '#000000', opacity: 0.6, blur: 10, offsetY: 2 },
+        stroke: { on: false, width: 2, color: '#000000' },
+        glow: { on: false, color: '#f59e0b', size: 18, opacity: 0.8, strength: 1 },
+        fitWidth: 0,
+        shadow: { on: false, color: '#000000', opacity: 0.6, blur: 10, offsetX: 0, offsetY: 2 },
         anim: anim('lettersFade', 'fade', { delay: 0.55, inDur: 0.8, inEase: 'easeOutCubic', offset: 0.2, outDur: 0.3, stagger: 0.15 }),
         transform: transform(true),
         mask: mask(),
@@ -150,6 +158,20 @@
     return out;
   }
 
+  // A new extra layer. Shapes default to an accent bar on the left of the box; text and logos sit above it.
+  function newLayer(kind, o = {}) {
+    const d = defaultState();
+    const common = { kind, name: '', visible: true, attach: 'box', ax: 0, ay: 0, x: 0, y: 0, w: 0, h: 0, opacity: 1,
+      anim: anim('fade', 'fade', { delay: 0.3, inDur: 0.4, offset: 0.1, outDur: 0.3 }), transform: transform(kind === 'text'), mask: mask(),
+      shadow: { on: false, color: '#000000', opacity: 0.5, blur: 12, offsetX: 0, offsetY: 4 }, stroke: { on: false, width: 2, color: '#ffffff' } };
+    if (kind === 'text') {
+      const { stroke, shadow, ...place } = common;
+      return deepMerge({ ...JSON.parse(JSON.stringify(d.subtitle)), ...place, name: 'Text', text: 'New text', size: 24, y: -40, animators: [] }, o);
+    }
+    if (kind === 'image') return deepMerge({ ...common, name: 'Logo', src: '', file: '', w: 120, ax: 1, ay: 0.5, x: 140, anim: anim('pop', 'fade', { delay: 0.4, inDur: 0.45, inEase: 'easeOutBack', offset: 0.1, outDur: 0.3 }) }, o);
+    return deepMerge({ ...common, name: 'Accent bar', shape: 'rect', color: '#f59e0b', radius: 0, w: 8, h: 0, ax: 0, ay: 0, x: -14, anim: anim('growY', 'growY', { inDur: 0.45, outDur: 0.35 }) }, o);
+  }
+
   global.Presets = {
     defaultState,
     BUILTIN,
@@ -160,8 +182,11 @@
       const out = deepMerge(defaultState(), s || {});
       // Older files used a boolean "gradient" flag.
       if (s && s.backdrop && s.backdrop.gradient && !s.backdrop.fillType) out.backdrop.fillType = 'linear';
+      // Extra layers: fill in fields added after the file was saved.
+      for (const [id, ly] of Object.entries(out.layers || {})) out.layers[id] = deepMerge(newLayer(ly.kind || 'shape'), ly);
       return out;
     },
     builtin: (i) => deepMerge(defaultState(), BUILTIN[i].patch),
+    newLayer,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

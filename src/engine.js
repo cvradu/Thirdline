@@ -227,7 +227,8 @@
   }
   function imagesReady(state) {
     const bd = state.backdrop;
-    const srcs = [bd.type === 'image' && bd.image.src, bd.texture && bd.texture.enabled && bd.texture.src].filter(Boolean);
+    const srcs = [bd.type === 'image' && bd.image.src, bd.texture && bd.texture.enabled && bd.texture.src,
+      ...Object.values(state.layers || {}).filter((l) => l.kind === 'image').map((l) => l.src)].filter(Boolean);
     return Promise.all(srcs.map((src) => {
       const img = getImage(src);
       if (img.complete) return null;
@@ -633,8 +634,27 @@
     if (s.shadow && s.shadow.on) {
       ctx.shadowColor = rgba(s.shadow.color, s.shadow.opacity ?? 1);
       ctx.shadowBlur = s.shadow.blur;
+      ctx.shadowOffsetX = s.shadow.offsetX || 0;
       ctx.shadowOffsetY = s.shadow.offsetY || 0;
     }
+  }
+  // Fills one run of text with the layer's glow (underneath), outline stroke and fill.
+  function paintText(ctx, s, text, x, y) {
+    const gl = s.glow, st = s.stroke;
+    if (gl && gl.on && gl.size > 0) {
+      ctx.save();
+      ctx.shadowColor = rgba(gl.color, gl.opacity ?? 1); ctx.shadowBlur = gl.size; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0;
+      const passes = Math.max(1, Math.min(4, Math.round(gl.strength || 1)));
+      for (let i = 0; i < passes; i++) ctx.fillText(text, x, y);
+      ctx.restore();
+    }
+    if (st && st.on && st.width > 0) {
+      // Stroke at twice the width under the fill, so the outline sits outside the letters.
+      ctx.save(); ctx.lineJoin = 'round'; ctx.miterLimit = 2; ctx.lineWidth = st.width * 2; ctx.strokeStyle = st.color;
+      ctx.strokeText(text, x, y); ctx.restore();
+      ctx.shadowColor = 'transparent';
+    }
+    ctx.fillText(text, x, y);
   }
 
   function drawText(ctx, s, line, ph, L, state) {
@@ -686,9 +706,9 @@
       ctx.letterSpacing = `${ls}px`;
       const w = ctx.measureText(line.text).width - ls;
       const anchorX = line.x + line.width / 2 - w / 2;
-      ctx.fillText(line.text, anchorX, line.baseline);
+      paintText(ctx, s, line.text, anchorX, line.baseline);
     } else {
-      ctx.fillText(line.text, line.x, line.baseline);
+      paintText(ctx, s, line.text, line.x, line.baseline);
     }
     layerBlur = 0;
     ctx.restore();
@@ -767,7 +787,7 @@
       if (rot || sc !== 1) {
         ctx.translate(cx, cy); ctx.rotate((rot * Math.PI) / 180); ctx.scale(Math.max(1e-4, sc), Math.max(1e-4, sc)); ctx.translate(-cx, -cy);
       }
-      ctx.fillText(ch, x, line.baseline);
+      paintText(ctx, s, ch, x, line.baseline);
       ctx.restore();
     }
   }
@@ -787,7 +807,8 @@
   }
   // Draws a layer through its mask (if enabled) using an offscreen buffer.
   function withMask(ctx, state, layer, draw) {
-    const m = state[layer].mask;
+    const ly = typeof layer === 'string' ? getLayer(state, layer) : layer;
+    const m = ly && ly.mask;
     if (!m || !m.enabled) return draw(ctx);
     const { width: W, height: H } = state.comp;
     const off = offscreen(W, H);
@@ -804,6 +825,99 @@
     ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1; ctx.drawImage(off, 0, 0); ctx.restore();
   }
 
+
+  // ---------- Extra layers (logo, shapes, more text) ----------
+  // state.layers = { id: layer }, state.order = bottom→top list of ids (backdrop/title/subtitle included).
+  const EXTRA_KINDS = { text: 'Text', image: 'Logo / image', shape: 'Shape' };
+  const EXTRA_SHAPES = { rect: 'Rectangle', rounded: 'Rounded rectangle', ellipse: 'Circle / ellipse', line: 'Line' };
+  function getLayer(state, id) { return id === 'backdrop' || id === 'title' || id === 'subtitle' ? state[id] : state.layers && state.layers[id]; }
+  function layerOrder(state) {
+    const base = ['backdrop', 'title', 'subtitle'];
+    const ids = Object.keys(state.layers || {});
+    const order = (state.order || base).filter((id) => base.includes(id) || ids.includes(id));
+    for (const id of [...base, ...ids]) if (!order.includes(id)) order.push(id);
+    return order;
+  }
+  // Text layers with an auto-fit width shrink until they fit.
+  function fitTextSizes(ctx, state) {
+    const fit = (s) => {
+      if (!(s && s.fitWidth > 0 && s.text)) return s;
+      ctx.save(); const m = measureLine(ctx, s); ctx.restore();
+      if (m.width <= s.fitWidth) return s;
+      let size = s.size * (s.fitWidth / m.width);
+      ctx.save(); const m2 = measureLine(ctx, { ...s, size }); ctx.restore();
+      if (m2.width > s.fitWidth) size *= s.fitWidth / m2.width;
+      return { ...s, size: Math.max(4, size) };
+    };
+    let out = state;
+    for (const k of ['title', 'subtitle']) { const f = fit(state[k]); if (f !== state[k]) { if (out === state) out = { ...state }; out[k] = f; } }
+    if (state.layers) {
+      let layers = null;
+      for (const [id, ly] of Object.entries(state.layers)) if (ly.kind === 'text') { const f = fit(ly); if (f !== ly) { layers ??= { ...state.layers }; layers[id] = f; } }
+      if (layers) { if (out === state) out = { ...state }; out.layers = layers; }
+    }
+    return out;
+  }
+  // Untransformed box of each extra layer, positioned against the backdrop box or the frame.
+  function extraBoxes(ctx, state, L) {
+    const out = {};
+    const { width: W, height: H } = state.comp;
+    for (const [id, ly] of Object.entries(state.layers || {})) {
+      let w = ly.w || 0, h = ly.h || 0, line = null;
+      const ref = ly.attach === 'frame' ? { x: 0, y: 0, w: W, h: H } : L.box;
+      if (ly.kind === 'text') {
+        ctx.save(); line = measureLine(ctx, ly); ctx.restore();
+        if (line.empty) continue;
+        w = line.width; h = line.ascent + line.descent;
+      } else if (ly.kind === 'image') {
+        const img = getImage(ly.src);
+        if (!img) continue;
+        w = ly.w || 160;
+        h = img.complete && img.naturalWidth ? (w * img.naturalHeight) / img.naturalWidth : ly.h || w;
+      } else {
+        if (!w) w = ref.w; // 0 = match the backdrop box
+        if (!h) h = ref.h;
+        if (ly.shape === 'line') h = Math.max(1, ly.h || 4);
+      }
+      const ax = ly.ax ?? 0, ay = ly.ay ?? 0;
+      const x = ref.x + ref.w * ax - w * ax + (ly.x || 0);
+      const y = ref.y + ref.h * ay - h * ay + (ly.y || 0);
+      const b = { x, y, w, h };
+      if (line) b.line = { ...line, x, top: y, baseline: y + line.ascent, bottom: y + h };
+      out[id] = b;
+    }
+    return out;
+  }
+  function drawExtra(ctx, state, ly, b, ph, L) {
+    if (ly.kind === 'text') return drawText(ctx, { ...ly, clipToBox: false }, b.line, ph, L, state);
+    const tr = ly.transform || NO_TR;
+    const r = animParams(effType(ph), ph.p, b, ly.anim.distance);
+    ctx.save();
+    applyLayerTransform(ctx, tr, b.x + b.w / 2, b.y + b.h / 2);
+    layerBlur = tr.blur || 0;
+    applyParams(ctx, r, 200);
+    if (layerBlur > 0.05 && !(r.blur > 0.05)) ctx.filter = blurFilter(layerBlur);
+    if ((ly.opacity ?? 1) < 1) ctx.globalAlpha *= clamp(ly.opacity ?? 1);
+    if (ly.shadow && ly.shadow.on) {
+      ctx.shadowColor = rgba(ly.shadow.color, ly.shadow.opacity ?? 1); ctx.shadowBlur = ly.shadow.blur;
+      ctx.shadowOffsetX = ly.shadow.offsetX || 0; ctx.shadowOffsetY = ly.shadow.offsetY || 0;
+    }
+    if (ly.kind === 'image') {
+      const img = getImage(ly.src);
+      if (img && img.complete && img.naturalWidth) ctx.drawImage(img, b.x, b.y, b.w, b.h);
+    } else {
+      ctx.fillStyle = ly.color || '#ffffff';
+      ctx.beginPath();
+      if (ly.shape === 'ellipse') ctx.ellipse(b.x + b.w / 2, b.y + b.h / 2, b.w / 2, b.h / 2, 0, 0, Math.PI * 2);
+      else if (ly.shape === 'rounded' || ly.shape === 'line') roundRectPath(ctx, b.x, b.y, b.w, b.h, ly.shape === 'line' ? b.h / 2 : ly.radius || 0);
+      else ctx.rect(b.x, b.y, b.w, b.h);
+      ctx.fill();
+      if (ly.stroke && ly.stroke.on && ly.stroke.width > 0) { ctx.shadowColor = 'transparent'; ctx.lineWidth = ly.stroke.width; ctx.strokeStyle = ly.stroke.color; ctx.stroke(); }
+    }
+    layerBlur = 0;
+    ctx.restore();
+  }
+
   // ---------- Main render ----------
   function render(ctx, state, t, opts = {}) {
     const base = state;
@@ -815,13 +929,16 @@
     ctx.clearRect(0, 0, width, height);
     ctx.restore();
 
+    state = fitTextSizes(ctx, state);
     const L = computeLayout(ctx, state);
     const bd = state.backdrop;
+    L.extras = extraBoxes(ctx, state, L);
 
-    // Backdrop
-    if (bd.type !== 'none') {
-      const ph = phaseAt(bd.anim, t, duration);
-      if (ph.visible) {
+    for (const id of layerOrder(state)) {
+      if (id === 'backdrop') {
+        if (bd.type === 'none') continue;
+        const ph = phaseAt(bd.anim, t, duration);
+        if (!ph.visible) continue;
         const type = effType(ph);
         const margin = 200;
         const bb = { x: L.box.x, y: L.box.y, w: L.box.w, h: L.box.h };
@@ -837,16 +954,21 @@
           layerBlur = 0;
           c.restore();
         });
+      } else if (id === 'title' || id === 'subtitle') {
+        const ph = phaseAt(state[id].anim, t, duration);
+        if (!ph.visible || L[id].empty) continue;
+        withMask(ctx, state, id, (c) => drawText(c, state[id], L[id], ph, L, state));
+      } else {
+        const ly = state.layers && state.layers[id], eb = L.extras[id];
+        if (!ly || !eb || ly.visible === false) continue;
+        const ph = phaseAt(ly.anim, t, duration);
+        if (!ph.visible) continue;
+        withMask(ctx, state, ly, (c) => drawExtra(c, state, ly, eb, ph, L));
       }
-    }
-    // Text
-    for (const k of ['title', 'subtitle']) {
-      const ph = phaseAt(state[k].anim, t, duration);
-      if (!ph.visible || L[k].empty) continue;
-      withMask(ctx, state, k, (c) => drawText(c, state[k], L[k], ph, L, state));
     }
     void base;
 
+    L.order = layerOrder(state);
     L.layers = layerBounds(state, L);
     if (opts.guides) drawGuides(ctx, state, L, opts);
     return L;
@@ -886,9 +1008,8 @@
         o[j] = acc[j] / a; o[j + 1] = acc[j + 1] / a; o[j + 2] = acc[j + 2] / a; o[j + 3] = a / samples;
       }
       ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.putImageData(out, 0, 0); ctx.restore();
-      const rs0 = resolveAt(state, t); curT = t;
-      const L0 = computeLayout(ctx, rs0); L0.layers = layerBounds(rs0, L0);
-      return L0;
+      curT = t;
+      return layoutAt(ctx, resolveAt(state, t));
     }
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -901,14 +1022,23 @@
     }
     ctx.restore();
     // Layout / guides for the centre time (no clearing).
-    const rs = resolveAt(state, t);
     curT = t;
-    const L = computeLayout(ctx, rs);
-    L.layers = layerBounds(rs, L);
+    let rs = resolveAt(state, t);
+    const L = layoutAt(ctx, rs);
+    rs = fitTextSizes(ctx, rs);
     if (opts.guides) drawGuides(ctx, rs, L, opts);
     return L;
   }
 
+  // Layout plus per-layer bounds without drawing (used after motion-blur accumulation).
+  function layoutAt(ctx, rs) {
+    rs = fitTextSizes(ctx, rs);
+    const L = computeLayout(ctx, rs);
+    L.extras = extraBoxes(ctx, rs, L);
+    L.order = layerOrder(rs);
+    L.layers = layerBounds(rs, L);
+    return L;
+  }
   // Untransformed bounds of each layer, used for click-to-select.
   function layerBounds(state, L) {
     const tb = (line, s) => (line.empty ? null : { x: line.x - 4, y: line.top - s.size * 0.12, w: line.width + 8, h: (line.bottom - line.top) + s.size * 0.24 });
@@ -917,13 +1047,18 @@
       subtitle: tb(L.subtitle, state.subtitle),
       backdrop: state.backdrop.type === 'none' ? null : { ...L.box },
     };
-    for (const k of Object.keys(out)) if (out[k]) out[k].tr = { ...NO_TR, ...(state[k].transform || {}) };
+    const eb = L.extras || {};
+    for (const [id, b] of Object.entries(eb)) if (state.layers[id] && state.layers[id].visible !== false) out[id] = { x: b.x, y: b.y, w: b.w, h: b.h };
+    for (const k of Object.keys(out)) if (out[k]) out[k].tr = { ...NO_TR, ...((getLayer(state, k) || {}).transform || {}) };
     return out;
   }
   // Point-in-layer test that undoes the layer's transform (position, rotation, scale).
   function hitTest(L, x, y) {
     if (!L || !L.layers) return null;
-    for (const k of ['title', 'subtitle', 'backdrop']) {
+    // Topmost first; text and extras win over the backdrop even when it is above them.
+    const order = (L.order || ['backdrop', 'title', 'subtitle']).slice().reverse();
+    const pick = [...order.filter((k) => k !== 'backdrop'), 'backdrop'];
+    for (const k of pick) {
       const b = L.layers[k];
       if (!b) continue;
       const tr = b.tr || NO_TR;
@@ -970,18 +1105,18 @@
     }
     if (opts.selected && L.layers[opts.selected]) {
       const b = L.layers[opts.selected];
-      const m = state[opts.selected].mask;
+      const m = getLayer(state, opts.selected).mask;
       if (m && m.enabled) {
         ctx.save(); ctx.strokeStyle = '#22d3ee'; ctx.lineWidth = 1.5 * lw; ctx.setLineDash([3 * lw, 3 * lw]);
         maskPath(ctx, m); ctx.stroke(); ctx.restore();
       }
       ctx.save();
-      const tr = state[opts.selected].transform;
+      const tr = getLayer(state, opts.selected).transform;
       if (tr) applyLayerTransform(ctx, tr, b.x + b.w / 2, b.y + b.h / 2, false);
       ctx.strokeStyle = '#f59e0b'; ctx.lineWidth = 2 * lw; ctx.setLineDash([6 * lw, 4 * lw]);
       ctx.strokeRect(b.x - 3 * lw, b.y - 3 * lw, b.w + 6 * lw, b.h + 6 * lw);
       ctx.setLineDash([]);
-      const label = { backdrop: 'Backdrop', title: 'Title', subtitle: 'Subtitle' }[opts.selected];
+      const label = { backdrop: 'Backdrop', title: 'Title', subtitle: 'Subtitle' }[opts.selected] || getLayer(state, opts.selected).name || 'Layer';
       ctx.font = `600 ${12 * lw}px sans-serif`;
       const tw = ctx.measureText(label).width + 10 * lw;
       ctx.fillStyle = '#f59e0b';
@@ -999,7 +1134,7 @@
   }
 
   global.Engine = {
-    BACKDROP_ANIMS, TEXT_ANIMS, SHAPES, GRADIENT_TYPES, GRADIENT_ANIMS, BLEND_MODES,
+    BACKDROP_ANIMS, TEXT_ANIMS, SHAPES, GRADIENT_TYPES, GRADIENT_ANIMS, BLEND_MODES, EXTRA_KINDS, EXTRA_SHAPES, getLayer, layerOrder,
     render, renderFrame, computeLayout, phaseAt, timingSpans, imagesReady, getImage, hitTest, resolveAt, valueAtKeys, selectorAmount,
     set onImageLoad(fn) { onImageLoad = fn; },
   };
