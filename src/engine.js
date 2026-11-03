@@ -331,7 +331,7 @@
   // b = element bounds. Returns parameters to apply around the element draw.
   function animParams(type, p, b, dist) {
     const q = 1 - p;
-    const r = { dx: 0, dy: 0, sx: 1, sy: 1, ox: b.x + b.w / 2, oy: b.y + b.h / 2, alpha: 1, clip: null, blur: 0, tracking: 0, maskSelf: false };
+    const r = { dx: 0, dy: 0, sx: 1, sy: 1, ox: b.x + b.w / 2, oy: b.y + b.h / 2, alpha: 1, clip: null, blur: 0, tracking: 0, maskSelf: false, b };
     switch (type) {
       case 'fade': r.alpha = p; break;
       case 'slideLeft': r.dx = -dist * q; r.alpha = clamp(p * 3); break;
@@ -358,13 +358,36 @@
     return r;
   }
 
-  function applyParams(ctx, r, margin = 0) {
+  // How far a layer's shadow / glow / outline reaches past its box, so wipes and mask reveals
+  // sweep across it too instead of cutting it off and letting it pop back when the clip ends.
+  function bleed(ly) {
+    if (!ly) return 0;
+    let e = 0;
+    const sh = ly.shadow;
+    if (sh && sh.on) e = Math.max(e, (sh.blur || 0) * 1.5 + Math.max(Math.abs(sh.offsetX || 0), Math.abs(sh.offsetY || 0)));
+    const gl = ly.glow;
+    if (gl && gl.on) e = Math.max(e, (gl.size || 0) * 1.5);
+    const st = ly.stroke;
+    if (st && st.on) e += st.width || 0;
+    return Math.ceil(e);
+  }
+  // Wipe clip rect stretched along its axis so p = 0 shows nothing and p = 1 shows the box plus its bleed.
+  function sweepClip(c, b, s) {
+    if (!c || !(s > 0) || !b) return c;
+    if (c.axis === 'y') {
+      const k = (b.h + 2 * s) / Math.max(1e-6, b.h), y = b.y - s + (c.y - b.y) * k;
+      return { ...c, y, h: c.h * k };
+    }
+    const k = (b.w + 2 * s) / Math.max(1e-6, b.w), x = b.x - s + (c.x - b.x) * k;
+    return { ...c, x, w: c.w * k };
+  }
+  function applyParams(ctx, r, margin = 0, sweep = 0) {
     if (r.alpha < 1) ctx.globalAlpha *= clamp(r.alpha);
     if (r.blur + layerBlur > 0.05) ctx.filter = blurFilter(r.blur + layerBlur);
     if (r.clip) {
       ctx.beginPath();
       // Expand the clip along the non-animated axis so shadows are not cropped.
-      const c = r.clip;
+      const c = sweepClip(r.clip, r.b, sweep);
       if (c.axis === 'y') ctx.rect(c.x - margin, c.y, c.w + margin * 2, c.h);
       else ctx.rect(c.x, c.y - margin, c.w, c.h + margin * 2);
       ctx.clip();
@@ -686,8 +709,8 @@
       if (layerBlur > 0.05) ctx.filter = blurFilter(layerBlur);
       if (!perUnit) {
         const r = animParams(type, ph.p, b, s.anim.distance);
-        if (r.maskSelf) { const pad = s.size * 0.25; ctx.beginPath(); ctx.rect(b.x - pad, b.y - pad * 0.5, b.w + pad * 2, b.h + pad); ctx.clip(); }
-        applyParams(ctx, r, s.size);
+        if (r.maskSelf) { const pad = s.size * 0.25, e = bleed(s); ctx.beginPath(); ctx.rect(b.x - pad - e, b.y - pad * 0.5 - e, b.w + (pad + e) * 2, b.h + pad + 2 * e); ctx.clip(); }
+        applyParams(ctx, r, Math.max(s.size, bleed(s)), bleed(s));
       }
       drawChars(ctx, s, line, ph, perUnit ? type : 'none', animators);
       layerBlur = 0;
@@ -696,10 +719,10 @@
     }
     const r = animParams(type, ph.p, b, s.anim.distance);
     if (r.maskSelf) {
-      const pad = s.size * 0.25;
-      ctx.beginPath(); ctx.rect(b.x - pad, b.y - pad * 0.5, b.w + pad * 2, b.h + pad); ctx.clip();
+      const pad = s.size * 0.25, e = bleed(s);
+      ctx.beginPath(); ctx.rect(b.x - pad - e, b.y - pad * 0.5 - e, b.w + (pad + e) * 2, b.h + pad + 2 * e); ctx.clip();
     }
-    applyParams(ctx, r, s.size);
+    applyParams(ctx, r, Math.max(s.size, bleed(s)), bleed(s));
     if (r.tracking) {
       const extra = r.tracking * s.size * -1; // positive spread at start
       const ls = baseLs + extra;
@@ -895,7 +918,7 @@
     ctx.save();
     applyLayerTransform(ctx, tr, b.x + b.w / 2, b.y + b.h / 2);
     layerBlur = tr.blur || 0;
-    applyParams(ctx, r, 200);
+    applyParams(ctx, r, 200, bleed(ly));
     if (layerBlur > 0.05 && !(r.blur > 0.05)) ctx.filter = blurFilter(layerBlur);
     if ((ly.opacity ?? 1) < 1) ctx.globalAlpha *= clamp(ly.opacity ?? 1);
     if (ly.shadow && ly.shadow.on) {
@@ -948,7 +971,7 @@
           const tr = bd.transform || NO_TR;
           applyLayerTransform(c, tr, bb.x + bb.w / 2, bb.y + bb.h / 2);
           layerBlur = tr.blur || 0;
-          applyParams(c, r, margin);
+          applyParams(c, r, margin, bleed(bd));
           if (layerBlur > 0.05 && !(r.blur > 0.05)) c.filter = blurFilter(layerBlur);
           drawBackdrop(c, state, L);
           layerBlur = 0;
@@ -1135,7 +1158,7 @@
 
   global.Engine = {
     BACKDROP_ANIMS, TEXT_ANIMS, SHAPES, GRADIENT_TYPES, GRADIENT_ANIMS, BLEND_MODES, EXTRA_KINDS, EXTRA_SHAPES, getLayer, layerOrder,
-    render, renderFrame, computeLayout, phaseAt, timingSpans, imagesReady, getImage, hitTest, resolveAt, valueAtKeys, selectorAmount,
+    render, renderFrame, computeLayout, layoutAt, bleed, measureLine, fitTextSizes, extraBoxes, PER_CHAR, PER_WORD, OUT_SWAP, phaseAt, timingSpans, imagesReady, getImage, hitTest, resolveAt, valueAtKeys, selectorAmount,
     set onImageLoad(fn) { onImageLoad = fn; },
   };
 })(typeof window !== 'undefined' ? window : globalThis);

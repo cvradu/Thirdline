@@ -1,6 +1,6 @@
 {
   "name": "thirdline",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "Thirdline: design animated lower thirds and export them with alpha (ProRes 4444, WebM, PNG).",
   "main": "main.js",
   "scripts": {
