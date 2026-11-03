@@ -49,6 +49,7 @@
         read: async () => null,
         onOpenPath: () => {},
       },
+      mogrt: { findAE: async () => null, run: async () => ({ error: 'no-ae' }), revealScript: async () => {} },
       onMenu: () => {},
       reveal: async () => {},
       info: async () => ({ platform: 'browser' }),
@@ -1861,6 +1862,7 @@
     const mx = e.clientX - r.left, my = e.clientY - r.top;
     const row = rowAt(timelineRows(), my);
     let cur = 'pointer', tip = '';
+    if (Math.abs(mx - sx(state.comp.duration)) <= 7 && (my < TL.ruler || !row || row.type !== 'bar')) { tl.style.cursor = 'ew-resize'; tl.title = `Drag to change the length (${state.comp.duration.toFixed(2)} s)`; return; }
     if (row && row.type === 'bar' && mx >= TL.left) {
       const a = lay(row.key).anim;
       const sp = Engine.timingSpans(a, state.comp.duration);
@@ -2369,7 +2371,7 @@
   api.project.onOpenPath(async (p) => { if (!confirmDiscard()) return; const r = await api.project.read(p); if (r) loadProjectText(r.text, r.path); });
   api.onMenu((cmd) => ({
     new: newProject, open: openProject, save: () => saveProject(false), saveAs: () => saveProject(true),
-    export: () => $('#btnExport').click(), undo, redo, batch: openBatch, live: openLive, updates: () => checkUpdates(true),
+    export: () => $('#btnExport').click(), undo, redo, batch: openBatch, live: openLive, mogrt: () => openMogrt(), updates: () => checkUpdates(true),
   })[cmd]?.());
   $('#btnNew').onclick = newProject;
   $('#btnOpen').onclick = openProject;
@@ -2377,6 +2379,7 @@
   $('#btnSaveAs').onclick = () => saveProject(true);
   $('#btnSavePreset').onclick = () => saveStyle();
   $('#btnBatch').onclick = () => openBatch();
+  $('#btnMogrt').onclick = () => openMogrt();
   $('#btnLiveMenu').onclick = () => openLive();
   $('#btnUpdates').onclick = () => checkUpdates(true);
   $('#btnFile').onclick = (e) => { e.stopPropagation(); $('#fileMenu').hidden = !$('#fileMenu').hidden; };
@@ -2503,6 +2506,7 @@
     const [f, tip] = EXPORT_FOR[$('#exportFor').value] || [null, ''];
     if (f) dlg.querySelector(`input[name=fmt][value=${f}]`).checked = true;
     $('#exportTip').textContent = tip;
+    $('#mogrtHint').hidden = $('#exportFor').value !== 'premiere';
     try { localStorage.setItem('thirdline:exportFor', $('#exportFor').value); } catch {}
     exportSummary();
   }
@@ -2510,6 +2514,53 @@
   try { const v = localStorage.getItem('thirdline:exportFor'); if (v && EXPORT_FOR[v]) $('#exportFor').value = v; } catch {}
   $('#exportFps').addEventListener('change', (e) => { state.comp.fps = +e.target.value; changed({ sync: true }); exportSummary(); });
   dlg.querySelectorAll('input[name=fmt]').forEach((r) => r.addEventListener('change', () => { $('#exportFor').value = 'custom'; $('#exportTip').textContent = ''; }));
+
+  // ---------- Export as .mogrt (After Effects builds it) ----------
+  const mDlg = $('#mogrtDialog');
+  async function openMogrt() {
+    $('#mogrtError').hidden = true; $('#mogrtStatus').textContent = '';
+    $('#mogrtGo').disabled = false;
+    const ae = await api.mogrt.findAE();
+    $('#mogrtAE').textContent = ae ? ae.name : 'After Effects';
+    if (!ae) {
+      $('#mogrtError').hidden = false;
+      $('#mogrtError').textContent = 'After Effects isn’t installed on this computer (Thirdline looked in Applications). Install it from Creative Cloud, or export ProRes 4444 for Premiere instead.';
+      $('#mogrtGo').disabled = true;
+    }
+    if (!mDlg.open) mDlg.showModal();
+  }
+  $('#mogrtFromExport').onclick = (e) => { e.preventDefault(); dlg.close(); openMogrt(); };
+  $('#mogrtCancel').onclick = () => mDlg.close();
+  $('#mogrtGo').onclick = async () => {
+    const go = $('#mogrtGo');
+    go.disabled = true; $('#mogrtError').hidden = true;
+    $('#mogrtStatus').textContent = $('#mogrtFonts').checked ? 'Getting fonts and starting After Effects…' : 'Starting After Effects…';
+    try {
+      const c = document.createElement('canvas').getContext('2d');
+      const name = ($('#docName').textContent || 'Lower third').replace(/\s*•\s*$/, '').replace(/\.l3rd$/i, '').trim() || 'Lower third';
+      const { scene, images } = Mogrt.buildScene(state, c, { name: name === 'Untitled' ? 'Lower third' : name });
+      for (const f of Object.values(scene.fonts)) {
+        const u = userFonts.find((x) => x.family === f.family);
+        if (u) f.userFile = u.file;
+      }
+      const r = await api.mogrt.run({ scene, images, installFonts: $('#mogrtFonts').checked });
+      if (r.error) {
+        $('#mogrtError').hidden = false;
+        $('#mogrtError').textContent = r.error === 'no-ae' ? 'After Effects isn’t installed on this computer.' : r.error;
+        $('#mogrtStatus').textContent = '';
+        go.disabled = false;
+        return;
+      }
+      $('#mogrtStatus').textContent = `${r.ae} is building your template. Switch to it: it will ask where to save the .mogrt.` +
+        (r.installed && r.installed.length ? ` Installed fonts: ${r.installed.join(', ')}.` : '') +
+        (r.notes && r.notes.length ? ` ${r.notes.join(' ')}` : '');
+      go.textContent = 'Run again';
+      go.disabled = false;
+    } catch (e) {
+      $('#mogrtError').hidden = false; $('#mogrtError').textContent = String(e.message || e);
+      $('#mogrtStatus').textContent = ''; go.disabled = false;
+    }
+  };
 
   // ---------- Batch export (CSV) ----------
   const bDlg = $('#batchDialog');
@@ -2666,7 +2717,7 @@
     $('#btnHold').click();
     drawTimeline();
     refreshGallery();
-    window.__l3rd = { get state() { return state; }, setTime, replaceState, render: drawPreview, selectLayer, addLayer, loadCSV, openBatch };
+    window.__l3rd = { get state() { return state; }, setTime, replaceState, render: drawPreview, selectLayer, addLayer, loadCSV, openBatch, openMogrt };
     setTimeout(() => checkUpdates(false).catch(() => {}), 3000);
   }
   boot();

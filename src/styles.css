@@ -253,3 +253,7 @@ details.more > summary .sub { margin-left: auto; margin-right: 8px; }
 .tcol { flex: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .tcol #scrub { width: 100%; }
 .ph-head { width: 3px; box-shadow: 0 0 0 1px #0006; }
+.warn-box { background: #f59e0b1f; border: 1px solid #f59e0b66; color: #fde68a; border-radius: 8px; padding: 10px 12px; font-size: 12.5px; line-height: 1.5; }
+.mogrt-hint a { color: var(--accent); }
+#mogrtDialog .chk { display: flex; gap: 8px; align-items: flex-start; white-space: normal; line-height: 1.4; margin: 12px 0 4px; }
+#mogrtDialog .modal { max-width: 520px; }

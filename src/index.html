@@ -19,6 +19,7 @@
         <button id="btnSaveAs">Save as…</button>
         <hr />
         <button id="btnSavePreset">Save design as a style…</button>
+        <button id="btnMogrt">Export as .mogrt for Premiere (via After Effects)…</button>
         <button id="btnBatch">Batch export from a spreadsheet (CSV)…</button>
         <button id="btnLiveMenu">Live output for OBS…</button>
         <hr />
@@ -175,6 +176,7 @@
         <option value="custom">Something else</option>
       </select></div>
       <p class="sub" id="exportTip"></p>
+      <p class="sub mogrt-hint" id="mogrtHint" hidden>Want a template editors can retype in Premiere? <a href="#" id="mogrtFromExport">Export as .mogrt via After Effects…</a></p>
       <div class="formats" id="formatList">
         <label><input type="radio" name="fmt" value="prores" checked /> <b>MOV · ProRes 4444</b><small>Alpha channel. Best for Premiere, Final Cut, Resolve, After Effects.</small></label>
         <label><input type="radio" name="fmt" value="webm" /> <b>WebM · VP9</b><small>Alpha channel. Small files, for web players, OBS and browsers.</small></label>
@@ -197,6 +199,25 @@
     </form>
   </dialog>
 
+  <dialog id="mogrtDialog">
+    <form method="dialog" class="modal">
+      <h2>Export as .mogrt</h2>
+      <p class="sub">A .mogrt is a Motion Graphics template: Premiere Pro editors can change the text and colours in the Essential Graphics panel. Only After Effects can make one, so Thirdline will:</p>
+      <ol class="sub" style="padding-left:18px;line-height:1.6">
+        <li>open <b id="mogrtAE">After Effects</b> and start a <b>new project</b>,</li>
+        <li>rebuild this lower third there as an editable comp,</li>
+        <li>ask where to save it, then save the <b>.aep</b> and export the <b>.mogrt</b> next to it.</li>
+      </ol>
+      <p class="warn-box"><b>Save your work in After Effects first.</b> Starting a new project closes the one that’s open. If it has unsaved changes, After Effects will ask whether to save them; you can also save and close it yourself before continuing.</p>
+      <label class="chk"><input type="checkbox" id="mogrtFonts" checked /> Install the fonts this design uses on this computer (After Effects and Premiere need them)</label>
+      <p class="sub" id="mogrtStatus"></p>
+      <p class="error" id="mogrtError" hidden></p>
+      <div class="actions">
+        <button type="button" id="mogrtCancel">Cancel</button>
+        <button type="button" id="mogrtGo" class="primary">Open in After Effects</button>
+      </div>
+    </form>
+  </dialog>
   <dialog id="batchDialog">
     <form method="dialog" class="modal">
       <h2>Batch export from a spreadsheet</h2>
@@ -249,6 +270,7 @@
   <script src="engine.js"></script>
   <script src="presets.js"></script>
   <script src="batch.js"></script>
+  <script src="mogrt.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

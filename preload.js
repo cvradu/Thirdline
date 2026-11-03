@@ -38,6 +38,11 @@ contextBridge.exposeInMainWorld('api', {
     status: () => ipcRenderer.invoke('live:status'),
     onCued: (cb) => ipcRenderer.on('live:cued', (_e, a) => cb(a)),
   },
+  mogrt: {
+    findAE: () => ipcRenderer.invoke('mogrt:findAE'),
+    run: (opts) => ipcRenderer.invoke('mogrt:export', opts),
+    revealScript: (p) => ipcRenderer.invoke('mogrt:revealScript', p),
+  },
   updates: {
     check: () => ipcRenderer.invoke('update:check'),
     open: (url) => ipcRenderer.invoke('shell:openExternal', url),

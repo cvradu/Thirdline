@@ -75,6 +75,7 @@ function buildMenu() {
       { label: 'Save As…', accelerator: 'Shift+CmdOrCtrl+S', click: send('saveAs') },
       { type: 'separator' },
       { label: 'Export Video…', accelerator: 'CmdOrCtrl+E', click: send('export') },
+      { label: 'Export as .mogrt (via After Effects)…', click: send('mogrt') },
       ...(isMac ? [] : [{ type: 'separator' }, { role: 'quit' }]),
     ] },
     { label: 'Edit', submenu: [
@@ -316,3 +317,173 @@ ipcMain.handle('update:check', async () => {
   } catch (e) { return { error: String(e.message || e) }; }
 });
 ipcMain.handle('shell:openExternal', (_e, url) => { if (/^https:\/\/github\.com\/cvradu\/Thirdline\//.test(url)) shell.openExternal(url); });
+
+// ---------- Export as .mogrt (via After Effects) ----------
+// Thirdline can't write .mogrt files itself (only Adobe's apps can), so it rebuilds the design in
+// After Effects with a script and lets After Effects export the template.
+const os = require('os');
+function findAfterEffects() {
+  if (process.env.L3RD_AE_FAKE) return { app: process.env.L3RD_AE_FAKE, name: 'Adobe After Effects (test)', fake: true };
+  const found = [];
+  if (process.platform === 'darwin') {
+    let dirs = [];
+    try { dirs = fs.readdirSync('/Applications').filter((d) => /^Adobe After Effects/i.test(d)); } catch {}
+    for (const d of dirs) {
+      const dir = path.join('/Applications', d);
+      try {
+        for (const f of fs.readdirSync(dir)) if (/^Adobe After Effects.*\.app$/i.test(f)) found.push({ app: path.join(dir, f), name: f.replace(/\.app$/i, '') });
+      } catch {}
+    }
+  } else if (process.platform === 'win32') {
+    const roots = [process.env.ProgramFiles, process.env['ProgramW6432']].filter(Boolean);
+    for (const r of [...new Set(roots)]) {
+      const adobe = path.join(r, 'Adobe');
+      let dirs = [];
+      try { dirs = fs.readdirSync(adobe).filter((d) => /^Adobe After Effects/i.test(d)); } catch {}
+      for (const d of dirs) {
+        const exe = path.join(adobe, d, 'Support Files', 'AfterFX.exe');
+        if (fs.existsSync(exe)) found.push({ app: exe, name: d });
+      }
+    }
+  }
+  // Newest first ("2025" > "2024" > "CC 2019").
+  const year = (n) => +((n.match(/(20\d\d)/) || [])[1] || 0);
+  found.sort((a, b) => year(b.name) - year(a.name) || b.name.localeCompare(a.name));
+  return found[0] || null;
+}
+ipcMain.handle('mogrt:findAE', () => findAfterEffects());
+
+// PostScript name (name ID 6) of a .ttf / .otf file.
+function fontPostScriptName(buf) {
+  try {
+    const n = buf.readUInt16BE(4);
+    for (let i = 0; i < n; i++) {
+      const rec = 12 + i * 16;
+      if (buf.toString('ascii', rec, rec + 4) !== 'name') continue;
+      const off = buf.readUInt32BE(rec + 8);
+      const count = buf.readUInt16BE(off + 2), strOff = off + buf.readUInt16BE(off + 4);
+      let best = null;
+      for (let j = 0; j < count; j++) {
+        const r = off + 6 + j * 12;
+        const platform = buf.readUInt16BE(r), id = buf.readUInt16BE(r + 6), len = buf.readUInt16BE(r + 8), o = strOff + buf.readUInt16BE(r + 10);
+        if (id !== 6) continue;
+        if (platform === 3 || platform === 0) {
+          let s = ''; for (let k = 0; k < len; k += 2) s += String.fromCharCode(buf.readUInt16BE(o + k));
+          return s;
+        }
+        if (platform === 1) best = buf.toString('latin1', o, o + len);
+      }
+      return best;
+    }
+  } catch {}
+  return null;
+}
+// Families bundled with Thirdline (from src/fonts/fonts.css).
+function bundledFamilies() {
+  try { return [...new Set([...fs.readFileSync(path.join(__dirname, 'src', 'fonts', 'fonts.css'), 'utf8').matchAll(/font-family:\s*'([^']+)'/g)].map((m) => m[1]))]; } catch { return []; }
+}
+// Full desktop TTF of a bundled (Google) font, downloaded once and cached.
+async function googleFontFile(family, weight, italic) {
+  const dir = path.join(userDir(), 'ae-fonts');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${family.replace(/\s+/g, '')}-${weight}${italic ? 'i' : ''}.ttf`);
+  if (fs.existsSync(file) && fs.statSync(file).size > 1000) return file;
+  const css = await (await fetch(`https://fonts.googleapis.com/css2?family=${encodeURIComponent(family)}:ital,wght@${italic ? 1 : 0},${weight}`, { headers: { 'User-Agent': 'Mozilla/4.0' } })).text();
+  const m = css.match(/url\((https:[^)]+\.ttf)\)/);
+  if (!m) throw new Error(`Google Fonts has no file for ${family} ${weight}${italic ? ' italic' : ''}`);
+  const r = await fetch(m[1]);
+  if (!r.ok) throw new Error(`Font download failed (HTTP ${r.status})`);
+  fs.writeFileSync(file, Buffer.from(await r.arrayBuffer()));
+  return file;
+}
+function userFontsFolder() {
+  if (process.platform === 'darwin') return path.join(os.homedir(), 'Library', 'Fonts');
+  if (process.platform === 'win32') return path.join(process.env.LOCALAPPDATA || '', 'Microsoft', 'Windows', 'Fonts');
+  return path.join(os.homedir(), '.local', 'share', 'fonts');
+}
+// Resolves every font the design uses to a PostScript name, installing it when asked to.
+async function prepareFonts(fonts, install) {
+  const bundled = bundledFamilies();
+  const notes = [];
+  const installed = [];
+  for (const f of Object.values(fonts)) {
+    let file = null;
+    try {
+      if (f.userFile) {
+        const p = path.join(fontsDir(), path.basename(f.userFile));
+        if (/\.(ttf|otf)$/i.test(p) && fs.existsSync(p)) file = p;
+        else notes.push(`“${f.family}” was uploaded as a web font (${path.extname(p)}), which After Effects can’t use. Install a .ttf/.otf of it.`);
+      } else if (bundled.includes(f.family)) {
+        file = await googleFontFile(f.family, f.weight, f.italic);
+      }
+    } catch (e) { notes.push(`Couldn’t get ${f.family} ${f.style}: ${e.message}`); }
+    if (!file) continue;
+    f.ps = fontPostScriptName(fs.readFileSync(file)) || null;
+    if (install) {
+      const dest = path.join(userFontsFolder(), path.basename(file));
+      try {
+        if (!fs.existsSync(dest)) {
+          fs.mkdirSync(path.dirname(dest), { recursive: true });
+          fs.copyFileSync(file, dest);
+          installed.push(`${f.family} ${f.style}`);
+        }
+      } catch (e) { notes.push(`Couldn’t install ${f.family}: ${e.message}`); }
+    }
+  }
+  if (process.platform === 'win32' && installed.length) notes.push('On Windows, newly installed fonts may need a restart of After Effects and Premiere to show up.');
+  return { notes, installed };
+}
+// JSON with every non-ASCII character escaped, so the script reads the same in any encoding.
+const asciiJSON = (v) => JSON.stringify(v).replace(/[\u007f-￿]/g, (c) => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
+function writeDataUrl(dataUrl, dir, base) {
+  const m = /^data:([^;,]+)?(;base64)?,(.*)$/s.exec(dataUrl || '');
+  if (!m) return null;
+  const ext = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/svg+xml': 'svg', 'image/gif': 'gif', 'image/webp': 'png' }[m[1]] || 'png';
+  const file = path.join(dir, `${base}.${ext}`);
+  fs.writeFileSync(file, m[2] ? Buffer.from(m[3], 'base64') : Buffer.from(decodeURIComponent(m[3])));
+  return file;
+}
+function runInAfterEffects(ae, jsx) {
+  return new Promise((resolve) => {
+    if (ae.fake) return resolve({ ok: true });
+    let child;
+    if (process.platform === 'darwin') {
+      const esc = (s) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+      child = spawn('osascript', ['-e', 'with timeout of 3600 seconds', '-e', `tell application "${esc(ae.name)}"`, '-e', 'activate', '-e', `DoScriptFile "${esc(jsx)}"`, '-e', 'end tell', '-e', 'end timeout']);
+    } else if (process.platform === 'win32') {
+      child = spawn(ae.app, ['-r', jsx], { detached: true, stdio: 'ignore' });
+      child.unref();
+      return resolve({ ok: true });
+    } else return resolve({ error: 'After Effects only runs on macOS and Windows.' });
+    let err = '';
+    child.stderr.on('data', (d) => { err += d; });
+    // osascript waits until the script finishes (it shows dialogs), so only report early failures.
+    const timer = setTimeout(() => resolve({ ok: true }), 8000);
+    child.on('exit', (code) => {
+      clearTimeout(timer);
+      if (code && err) {
+        const denied = /-1743|not authori[sz]ed|Not allowed/i.test(err);
+        resolve({ error: denied ? 'macOS blocked Thirdline from controlling After Effects. Allow it in System Settings › Privacy & Security › Automation, then try again.' : err.trim() });
+      } else resolve({ ok: true });
+    });
+  });
+}
+ipcMain.handle('mogrt:export', async (_e, { scene, images, installFonts }) => {
+  const ae = findAfterEffects();
+  if (!ae) return { error: 'no-ae' };
+  const dir = path.join(userDir(), 'mogrt', String(Date.now()));
+  fs.mkdirSync(dir, { recursive: true });
+  scene.imageFiles = {};
+  for (const [id, src] of Object.entries(images || {})) {
+    const f = writeDataUrl(src, dir, id);
+    if (f) scene.imageFiles[id] = f;
+  }
+  const fontInfo = await prepareFonts(scene.fonts, installFonts);
+  scene.warnings = [...scene.warnings, ...fontInfo.notes];
+  const template = fs.readFileSync(path.join(__dirname, 'src', 'ae', 'thirdline-build.jsx'), 'utf8');
+  const jsx = path.join(dir, 'thirdline-build.jsx');
+  fs.writeFileSync(jsx, `var SCENE = ${asciiJSON(scene)};\n${template}`);
+  const r = await runInAfterEffects(ae, jsx);
+  return { ...r, ae: ae.name, installed: fontInfo.installed, notes: fontInfo.notes, script: jsx };
+});
+ipcMain.handle('mogrt:revealScript', (_e, p) => { if (p && p.startsWith(path.join(userDir(), 'mogrt'))) shell.showItemInFolder(p); });

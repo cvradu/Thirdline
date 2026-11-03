@@ -1,6 +1,6 @@
 {
   "name": "thirdline",
-  "version": "0.7.3",
+  "version": "0.8.0",
   "description": "Thirdline: design animated lower thirds and export them with alpha (ProRes 4444, WebM, PNG).",
   "main": "main.js",
   "scripts": {
@@ -15,6 +15,7 @@
     "ffmpeg-static": "^5.2.0"
   },
   "devDependencies": {
+    "acorn": "^8.19.0",
     "electron": "^33.2.1",
     "electron-builder": "^25.1.8"
   },
@@ -39,7 +40,10 @@
         "dmg"
       ],
       "identity": null,
-      "darkModeSupport": true
+      "darkModeSupport": true,
+      "extendInfo": {
+        "NSAppleEventsUsageDescription": "Thirdline asks After Effects to build your lower third so it can be exported as a Motion Graphics template (.mogrt)."
+      }
     },
     "win": {
       "target": [
