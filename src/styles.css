@@ -133,3 +133,5 @@ body.advanced .adv-toggle { border-color: var(--accent); color: var(--accent); }
 .animator-head b { font-size: 12px; color: var(--accent); }
 .animator-head button { padding: 1px 7px; font-size: 11px; }
 .animator-sub { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #596176; margin: 8px 0 2px; }
+.kbgroup { display: contents; }
+.kbgroup[hidden] { display: none; }

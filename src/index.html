@@ -79,9 +79,17 @@
       </div>
       <div class="keybar" id="keyBar" hidden>
         <b id="kbLabel"></b>
-        <span class="muted">at</span> <span id="kbTime" class="timecode" style="min-width:0"></span>
-        <label class="lbl">Value</label> <input id="kbValue" type="number" step="any" />
-        <label class="lbl">Ease to next</label> <select id="kbEase"></select>
+        <span id="kbKeyCtl" class="kbgroup">
+          <span class="muted">at</span> <span id="kbTime" class="timecode" style="min-width:0"></span>
+          <label class="lbl">Value</label> <input id="kbValue" type="number" step="any" />
+          <label class="lbl">Ease to next</label> <select id="kbEase"></select>
+        </span>
+        <span id="kbPreCtl" class="kbgroup" hidden>
+          <select id="kpType" title="Animation type"></select>
+          <label class="lbl">Duration</label> <input id="kpDur" type="number" step="0.05" min="0.05" title="Seconds" />
+          <label class="lbl">Easing</label> <select id="kpEase"></select>
+          <button id="kpConvert">Convert to keyframes</button>
+        </span>
         <button id="kbPrev" title="Previous keyframe (J)">◀◆</button><button id="kbNext" title="Next keyframe (K)">◆▶</button>
         <button id="kbDelete" title="Delete keyframe (Delete)">Delete</button>
       </div>

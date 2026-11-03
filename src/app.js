@@ -1028,26 +1028,51 @@
   // ---------- Timeline ----------
   const tl = $('#timeline'), tctx = tl.getContext('2d');
   const TRACKS = [['backdrop', 'Backdrop', '#3b82f6'], ['title', 'Title', '#f59e0b'], ['subtitle', 'Subtitle', '#22c55e']];
+  const TRACK_COLOR = Object.fromEntries(TRACKS.map(([k, , c]) => [k, c]));
   const TL = { left: 86, right: 16, ruler: 22, rowH: 28, keyH: 18 };
   const LAYER_ORDER = ['backdrop', 'title', 'subtitle', 'layout', 'comp'];
+  const collapsed = {}; // layer → true when its keyframe rows are folded away
+  let selPreset = null; // { key, dir: 'in' | 'out' } — a preset in/out animation picked on the timeline
   function keyRows() {
     if (!advanced || !state.keys) return [];
     return Object.keys(state.keys).filter((p) => state.keys[p]?.length)
       .sort((a, b) => (LAYER_ORDER.indexOf(a.split('.')[0]) - LAYER_ORDER.indexOf(b.split('.')[0])) || a.localeCompare(b));
   }
-  const keysTop = () => TL.ruler + 6 + TRACKS.length * TL.rowH + 6;
+  const layerKeyPaths = (layer) => keyRows().filter((p) => p.split('.')[0] === layer);
+  // Flattened row model: each layer bar, then (Advanced) that layer's keyframe rows right beneath it.
+  // Position/canvas keyframes don't belong to a single layer, so they go in their own group at the bottom.
+  function timelineRows() {
+    const rows = []; let y = TL.ruler + 6;
+    const push = (r) => { r.y = y; rows.push(r); y += r.h; };
+    for (const [key, label, color] of TRACKS) {
+      const paths = layerKeyPaths(key);
+      push({ type: 'bar', key, label, color, h: TL.rowH, count: paths.length });
+      if (!collapsed[key]) for (const path of paths) push({ type: 'key', path, layer: key, h: TL.keyH });
+      if (paths.length && !collapsed[key]) y += 4;
+    }
+    const other = keyRows().filter((p) => !TRACK_COLOR[p.split('.')[0]]);
+    if (other.length) {
+      push({ type: 'group', key: 'other', label: 'Position / Canvas', h: TL.keyH + 2, count: other.length });
+      if (!collapsed.other) for (const path of other) push({ type: 'key', path, layer: path.split('.')[0], h: TL.keyH });
+    }
+    return rows;
+  }
+  const rowAt = (rows, my) => rows.find((r) => my >= r.y && my < r.y + r.h);
   function resizeTimeline() {
-    const rows = keyRows().length;
-    TL.left = rows ? 150 : 86;
-    const hgt = 120 + (rows ? rows * TL.keyH + 4 : 0);
+    const rows = timelineRows();
+    TL.left = advanced ? 150 : 86;
+    const last = rows[rows.length - 1];
+    const hgt = Math.max(120, Math.ceil(last.y + last.h + 22));
     if (tl.style.height !== `${hgt}px`) { tl.style.height = `${hgt}px`; tl.width = 0; }
     drawTimeline();
   }
   function keyLabel(path) {
     if (keyLabels[path]) return keyLabels[path];
     const parts = path.split('.');
-    return `${LAYER_NAMES[parts[0]] || parts[0]} · ${parts.slice(1).join(' ')}`;
+    return `${LAYER_NAMES[parts[0]] || parts[0]} · ${parts.slice(1).filter((x) => x !== 'transform').join(' ')}`;
   }
+  // Label without the layer name, for rows nested under their layer.
+  const shortKeyLabel = (path) => keyLabel(path).replace(/^[^·]+·\s*/, '');
   let tlDrag = null;
   function tlGeom() {
     const dpr = window.devicePixelRatio || 1;
@@ -1058,6 +1083,8 @@
     const st = (x) => ((x - TL.left) / (w - TL.left - TL.right)) * D;
     return { dpr, w, h, sx, st };
   }
+  function diamond(g, x, cy, sz) { g.beginPath(); g.moveTo(x, cy - sz); g.lineTo(x + sz, cy); g.lineTo(x, cy + sz); g.lineTo(x - sz, cy); g.closePath(); g.fill(); }
+  function fitText(g, s, max) { while (g.measureText(s).width > max && s.length > 4) s = s.slice(0, -2) + '…'; return s; }
   function drawTimeline() {
     const { dpr, w, h, sx } = tlGeom();
     const g = tctx; g.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -1071,90 +1098,133 @@
       g.beginPath(); g.moveTo(x, TL.ruler - 6); g.lineTo(x, h); g.stroke();
       g.fillText(`${+t.toFixed(1)}s`, x + 3, 12);
     }
-    TRACKS.forEach(([key, label, color], i) => {
-      const y = TL.ruler + 6 + i * TL.rowH;
-      const isSel = selected === key;
-      if (isSel) { g.fillStyle = '#f59e0b22'; g.fillRect(0, y, TL.left - 6, 22); }
-      g.fillStyle = isSel ? '#f59e0b' : '#8a93a6'; g.font = `${isSel ? 600 : 400} 11px -apple-system, sans-serif`; g.fillText(label, 10, y + 15);
-      const hidden = key === 'backdrop' ? state.backdrop.type === 'none' : !state[key].text;
-      const sp = Engine.timingSpans(state[key].anim, D);
-      const x0 = sx(sp.inStart), x1 = sx(sp.inEnd), x2 = sx(sp.outStart), x3 = sx(sp.outEnd);
-      g.globalAlpha = hidden ? 0.25 : 1;
-      g.fillStyle = color + '40'; g.fillRect(x0, y + 2, x3 - x0, 18);
-      g.fillStyle = color;
-      // in ramp
-      g.beginPath(); g.moveTo(x0, y + 20); g.lineTo(x1, y + 2); g.lineTo(x1, y + 20); g.fill();
-      // out ramp
-      g.beginPath(); g.moveTo(x2, y + 2); g.lineTo(x3, y + 20); g.lineTo(x2, y + 20); g.fill();
-      g.fillStyle = color + 'aa'; g.fillRect(x1, y + 14, Math.max(0, x2 - x1), 6);
-      // grips: in/out points (outer) and transition-length handles (inner)
-      g.fillStyle = '#ffffffcc';
-      for (const gx of [x0, x3]) g.fillRect(gx - 1, y + 2, 2, 18);
-      g.fillStyle = '#ffffff70';
-      if (state[key].anim.in.type !== 'none') g.fillRect(x1 - 1, y + 4, 2, 14);
-      if (state[key].anim.out.type !== 'none') g.fillRect(x2 - 1, y + 4, 2, 14);
-      g.globalAlpha = 1;
-    });
-    // Keyframe rows (Advanced)
-    const rows = keyRows();
-    rows.forEach((path, j) => {
-      const y = keysTop() + j * TL.keyH;
-      const layer = path.split('.')[0];
-      const isSel = selected === layer;
-      g.fillStyle = j % 2 ? '#ffffff05' : '#ffffff0a'; g.fillRect(0, y, w, TL.keyH);
-      g.fillStyle = isSel ? '#f59e0b' : '#8a93a6'; g.font = '10px -apple-system, sans-serif';
-      let label = keyLabel(path);
-      while (g.measureText(label).width > TL.left - 12 && label.length > 4) label = label.slice(0, -2) + '…';
-      g.fillText(label, 8, y + 12);
-      const ks = state.keys[path];
-      g.strokeStyle = '#ffffff30'; g.beginPath();
-      if (ks.length > 1) { g.moveTo(sx(ks[0].t), y + TL.keyH / 2); g.lineTo(sx(ks[ks.length - 1].t), y + TL.keyH / 2); g.stroke(); }
-      for (const k of ks) {
-        const x = sx(k.t), cy = y + TL.keyH / 2, sz = selKey && selKey.k === k ? 6 : 4.5;
-        g.fillStyle = selKey && selKey.k === k ? '#f59e0b' : k.e === 'hold' ? '#94a3b8' : '#e5e7eb';
-        g.beginPath(); g.moveTo(x, cy - sz); g.lineTo(x + sz, cy); g.lineTo(x, cy + sz); g.lineTo(x - sz, cy); g.closePath(); g.fill();
+    const rows = timelineRows();
+    let keyIdx = 0;
+    for (const row of rows) {
+      const y = row.y;
+      if (row.type === 'bar') {
+        keyIdx = 0;
+        const { key, label, color } = row;
+        const isSel = selected === key;
+        if (isSel) { g.fillStyle = '#f59e0b22'; g.fillRect(0, y, TL.left - 6, 22); }
+        let lx = 10;
+        if (advanced && row.count) {
+          g.fillStyle = '#8a93a6'; g.font = '10px -apple-system, sans-serif';
+          g.fillText(collapsed[key] ? '▸' : '▾', 5, y + 15); lx = 17;
+        }
+        g.fillStyle = isSel ? '#f59e0b' : '#8a93a6'; g.font = `${isSel ? 600 : 400} 11px -apple-system, sans-serif`; g.fillText(label, lx, y + 15);
+        if (advanced && row.count && collapsed[key]) {
+          g.fillStyle = '#596176'; g.font = '10px -apple-system, sans-serif';
+          g.fillText(`${row.count} ◆`, lx + g.measureText(label).width + 30, y + 15);
+        }
+        const a = state[key].anim;
+        const hidden = key === 'backdrop' ? state.backdrop.type === 'none' : !state[key].text;
+        const sp = Engine.timingSpans(a, D);
+        const x0 = sx(sp.inStart), x1 = sx(sp.inEnd), x2 = sx(sp.outStart), x3 = sx(sp.outEnd);
+        g.globalAlpha = hidden ? 0.25 : 1;
+        g.fillStyle = color + '40'; g.fillRect(x0, y + 2, x3 - x0, 18);
+        g.fillStyle = color;
+        g.beginPath(); g.moveTo(x0, y + 20); g.lineTo(x1, y + 2); g.lineTo(x1, y + 20); g.fill();
+        g.beginPath(); g.moveTo(x2, y + 2); g.lineTo(x3, y + 20); g.lineTo(x2, y + 20); g.fill();
+        g.fillStyle = color + 'aa'; g.fillRect(x1, y + 14, Math.max(0, x2 - x1), 6);
+        // Selected preset animation: outline its ramp
+        for (const dir of ['in', 'out']) {
+          if (!(selPreset && selPreset.key === key && selPreset.dir === dir) || a[dir].type === 'none') continue;
+          const [ra, rb] = dir === 'in' ? [x0, x1] : [x2, x3];
+          g.strokeStyle = '#fff'; g.lineWidth = 1.5; g.strokeRect(ra - 2, y + 0.5, rb - ra + 4, 21); g.lineWidth = 1;
+        }
+        g.fillStyle = '#ffffffcc';
+        for (const gx of [x0, x3]) g.fillRect(gx - 1, y + 2, 2, 18);
+        if (advanced) {
+          // Preset animations as keyframe pairs (start and end of each transition)
+          for (const [dir, xa, xb] of [['in', x0, x1], ['out', x2, x3]]) {
+            if (a[dir].type === 'none') continue;
+            const on = selPreset && selPreset.key === key && selPreset.dir === dir;
+            g.fillStyle = on ? '#f59e0b' : '#ffffffe0';
+            diamond(g, xa, y + 11, on ? 5.5 : 4.5); diamond(g, xb, y + 11, on ? 5.5 : 4.5);
+          }
+        } else {
+          g.fillStyle = '#ffffff70';
+          if (a.in.type !== 'none') g.fillRect(x1 - 1, y + 4, 2, 14);
+          if (a.out.type !== 'none') g.fillRect(x2 - 1, y + 4, 2, 14);
+        }
+        g.globalAlpha = 1;
+      } else if (row.type === 'group') {
+        keyIdx = 0;
+        g.fillStyle = '#ffffff08'; g.fillRect(0, y, w, row.h);
+        g.fillStyle = '#8a93a6'; g.font = '11px -apple-system, sans-serif';
+        g.fillText(`${collapsed.other ? '▸' : '▾'} ${row.label}`, 5, y + 13);
+      } else {
+        const { path, layer } = row;
+        const isSel = selected === layer;
+        const color = TRACK_COLOR[layer] || '#8a93a6';
+        g.fillStyle = keyIdx++ % 2 ? '#ffffff05' : '#ffffff0a'; g.fillRect(0, y, w, TL.keyH);
+        g.fillStyle = color + '90'; g.fillRect(8, y + 2, 2, TL.keyH - 4); // tie the row to its layer
+        g.fillStyle = isSel ? '#f59e0b' : '#8a93a6'; g.font = '10px -apple-system, sans-serif';
+        const lbl = TRACK_COLOR[layer] ? shortKeyLabel(path) : keyLabel(path);
+        g.fillText(fitText(g, lbl, TL.left - 24), 16, y + 12);
+        const ks = state.keys[path];
+        g.strokeStyle = '#ffffff30'; g.beginPath();
+        if (ks.length > 1) { g.moveTo(sx(ks[0].t), y + TL.keyH / 2); g.lineTo(sx(ks[ks.length - 1].t), y + TL.keyH / 2); g.stroke(); }
+        for (const k of ks) {
+          const on = selKey && selKey.k === k;
+          g.fillStyle = on ? '#f59e0b' : k.e === 'hold' ? '#94a3b8' : '#e5e7eb';
+          diamond(g, sx(k.t), y + TL.keyH / 2, on ? 6 : 4.5);
+        }
       }
-    });
+    }
     // Playhead
     const px = sx(time);
     g.strokeStyle = '#fff'; g.lineWidth = 1.5; g.beginPath(); g.moveTo(px, 0); g.lineTo(px, h); g.stroke(); g.lineWidth = 1;
     g.fillStyle = '#fff'; g.beginPath(); g.moveTo(px - 5, 0); g.lineTo(px + 5, 0); g.lineTo(px, 7); g.fill();
     g.fillStyle = '#596176'; g.font = '10px -apple-system, sans-serif';
-    if (!rows.length) g.fillText('Ramp: transition length · outer edge: in/out point · middle: move layer', TL.left, h - 6);
+    g.fillText(advanced
+      ? 'Click a ramp or ◆ to edit or delete its animation · drag ◆ to retime · ▾ folds a layer’s keyframes'
+      : 'Ramp: transition length · outer edge: in/out point · middle: move layer', TL.left, h - 6);
   }
   tl.addEventListener('pointerdown', (e) => {
     const { sx, st } = tlGeom();
     const r = tl.getBoundingClientRect(); const mx = e.clientX - r.left, my = e.clientY - r.top;
     tl.setPointerCapture(e.pointerId);
-    const rows = keyRows();
-    if (rows.length && my >= keysTop()) {
-      const j = Math.floor((my - keysTop()) / TL.keyH);
-      const path = rows[j];
-      if (path) {
-        const ks = state.keys[path];
-        let best = null, bd = 7;
-        for (const k of ks) { const d = Math.abs(sx(k.t) - mx); if (d < bd) { bd = d; best = k; } }
-        const layer = path.split('.')[0];
-        if (TRACKS.some((t) => t[0] === layer) && selected !== layer) selectLayer(layer, { reveal: true });
-        if (best) {
-          selKey = { path, k: best }; setPlaying(false);
-          tlDrag = { keyDrag: true, path, k: best, moved: false };
-          setTime(best.t);
-          return;
+    const row = rowAt(timelineRows(), my);
+    const release = () => { try { tl.releasePointerCapture(e.pointerId); } catch {} };
+    if (row && row.type === 'group') { if (mx < TL.left) { collapsed.other = !collapsed.other; resizeTimeline(); release(); return; } }
+    if (row && row.type === 'key') {
+      const ks = state.keys[row.path];
+      let best = null, bd = 7;
+      for (const k of ks) { const d = Math.abs(sx(k.t) - mx); if (d < bd) { bd = d; best = k; } }
+      if (TRACK_COLOR[row.layer] && selected !== row.layer) selectLayer(row.layer, { reveal: true });
+      if (best) {
+        selKey = { path: row.path, k: best }; selPreset = null; setPlaying(false);
+        tlDrag = { keyDrag: true, path: row.path, k: best, moved: false };
+        setTime(best.t); updateKeyBar();
+        return;
+      }
+      selKey = null; updateKeyBar();
+    }
+    if (row && row.type === 'bar') {
+      const key = row.key;
+      if (mx < TL.left) {
+        if (advanced && row.count && mx < 16) { collapsed[key] = !collapsed[key]; resizeTimeline(); }
+        else selectLayer(key);
+        release(); return;
+      }
+      if (selected !== key) selectLayer(key);
+      const a = state[key].anim;
+      const sp = Engine.timingSpans(a, state.comp.duration);
+      const mode = barHit(mx, sx(sp.inStart), sx(sp.inEnd), sx(sp.outStart), sx(sp.outEnd), a);
+      if (mode) {
+        if (advanced) {
+          const dir = mode === 'in' || mode === 'inDur' ? 'in' : mode === 'out' || mode === 'outDur' ? 'out' : null;
+          selPreset = dir && a[dir].type !== 'none' ? { key, dir } : null;
+          if (selPreset) selKey = null;
+          updateKeyBar(); drawTimeline();
         }
-        selKey = null;
+        tlDrag = { key, mode, t0: st(mx), delay: a.in.delay, offset: a.out.offset, inDur: a.in.duration, outDur: a.out.duration };
+        return;
       }
     }
-    const i = Math.floor((my - TL.ruler - 6) / TL.rowH);
-    if (mx < TL.left && i >= 0 && i < TRACKS.length) { selectLayer(TRACKS[i][0]); tl.releasePointerCapture(e.pointerId); return; }
-    if (my > TL.ruler && i >= 0 && i < TRACKS.length) {
-      if (selected !== TRACKS[i][0]) selectLayer(TRACKS[i][0]);
-      const key = TRACKS[i][0]; const a = state[key].anim;
-      const sp = Engine.timingSpans(a, state.comp.duration);
-      const x0 = sx(sp.inStart), x1 = sx(sp.inEnd), x2 = sx(sp.outStart), x3 = sx(sp.outEnd);
-      const mode = barHit(mx, x0, x1, x2, x3, a);
-      if (mode) { tlDrag = { key, mode, t0: st(mx), delay: a.in.delay, offset: a.out.offset, inDur: a.in.duration, outDur: a.out.duration }; return; }
-    }
+    if (selPreset) { selPreset = null; updateKeyBar(); }
     tlDrag = { scrub: true }; setPlaying(false); setTime(st(mx));
   });
   tl.addEventListener('pointermove', (e) => {
@@ -1196,25 +1266,106 @@
     if (tlDrag) return;
     const { sx } = tlGeom(); const r = tl.getBoundingClientRect();
     const mx = e.clientX - r.left, my = e.clientY - r.top;
-    const i = Math.floor((my - TL.ruler - 6) / TL.rowH);
+    const row = rowAt(timelineRows(), my);
     let cur = 'pointer', tip = '';
-    if (mx >= TL.left && my > TL.ruler && i >= 0 && i < TRACKS.length) {
-      const a = state[TRACKS[i][0]].anim;
+    if (row && row.type === 'bar' && mx >= TL.left) {
+      const a = state[row.key].anim;
       const sp = Engine.timingSpans(a, state.comp.duration);
       const m = barHit(mx, sx(sp.inStart), sx(sp.inEnd), sx(sp.outStart), sx(sp.outEnd), a);
       cur = { in: 'col-resize', out: 'col-resize', inDur: 'ew-resize', outDur: 'ew-resize', both: 'grab' }[m] || 'pointer';
       tip = { in: 'Drag to move the in point', out: 'Drag to move the out point', inDur: 'Drag to change the in transition length', outDur: 'Drag to change the out transition length', both: 'Drag to move the whole layer in time' }[m] || '';
-    }
+      if (advanced && (m === 'inDur' || m === 'outDur')) tip += ' · click to edit or delete this animation';
+    } else if (row && mx < 16 && (row.type === 'group' || (row.type === 'bar' && advanced && row.count))) tip = 'Show or hide this layer’s keyframes';
     tl.style.cursor = cur; tl.title = tip;
   });
   new ResizeObserver(drawTimeline).observe(tl);
 
+  // ---------- Preset animations as keyframes ----------
+  const animLabel = (key, dir) => {
+    const t = state[key].anim[dir].type;
+    return (key === 'backdrop' ? Engine.BACKDROP_ANIMS : Engine.TEXT_ANIMS)[t] || t;
+  };
+  // How each preset type maps onto the layer transform. fade = fraction of the transition over which opacity ramps.
+  const CONVERTIBLE = {
+    fade: { fade: 1 },
+    slideLeft: { fade: 1 / 3, prop: 'x', sign: -1 }, slideRight: { fade: 1 / 3, prop: 'x', sign: 1 },
+    slideUp: { fade: 1 / 3, prop: 'y', sign: 1 }, slideDown: { fade: 1 / 3, prop: 'y', sign: -1 },
+    scale: { fade: 1 / 4, scale: 0 }, pop: { fade: 1, scale: 0.6 },
+    blur: { fade: 2 / 3, blur: 24 },
+    growXCenter: { scaleX: true },
+  };
+  // Raw time (0..1) at which an easing curve first reaches the value v.
+  function easeInverse(fn, v) {
+    for (let i = 1; i <= 200; i++) if (fn(i / 200) >= v) return i / 200;
+    return 1;
+  }
+  function convertPreset(key, dir) {
+    const a = state[key].anim, A = a[dir];
+    const map = CONVERTIBLE[A.type];
+    if (!map) { toast(`“${animLabel(key, dir)}” can’t be turned into keyframes. You can still retime or delete it.`); return false; }
+    const sp = Engine.timingSpans(a, state.comp.duration);
+    const [t0, t1] = dir === 'in' ? [sp.inStart, sp.inEnd] : [sp.outStart, sp.outEnd];
+    const ease = getEasing(A.easing, A.bezier);
+    const tr = (p) => `${key}.transform.${p}`;
+    const base = (p, t) => (isKeyed(tr(p)) ? Engine.valueAtKeys(keysOf(tr(p)), t) : getPath(state, tr(p)) ?? (p === 'scale' || p === 'opacity' || p === 'scaleX' ? 100 : 0));
+    // Each property animates between "hidden" (h) and "shown" (s); the in goes h→s, the out goes s→h.
+    // Keys go at ta and tb; the "hidden" end is t0 for the in and t1 for the out.
+    const add = (p, hidden, ta = t0, tb = t1, e = A.easing) => {
+      const bA = base(p, ta), bB = base(p, tb);
+      const [vA, vB] = dir === 'in' ? [hidden(bA), bB] : [bA, hidden(bB)];
+      setKey(tr(p), ta, vA); setKey(tr(p), tb, vB);
+      const k = keysOf(tr(p))[keyIndexAt(tr(p), ta)];
+      if (k) { k.e = e; if (e === 'custom') k.bezier = [...A.bezier]; }
+    };
+    if (map.fade) {
+      if (map.fade >= 1) add('opacity', (b) => 0);
+      else if (dir === 'in') add('opacity', () => 0, t0, t0 + (t1 - t0) * easeInverse(ease, map.fade), 'linear');
+      else add('opacity', () => 0, t0 + (t1 - t0) * easeInverse(ease, 1 - map.fade), t1, 'linear');
+    }
+    if (map.prop) add(map.prop, (b) => b + map.sign * (a.distance || 0));
+    if (map.scale !== undefined) add('scale', (b) => b * map.scale);
+    if (map.blur) add('blur', (b) => b + map.blur);
+    if (map.scaleX) add('scaleX', () => 0.01);
+    A.type = 'none';
+    selPreset = null; collapsed[key] = false;
+    changed({ sync: true });
+    toast(`${LAYER_NAMES[key]} ${dir === 'in' ? 'in' : 'out'} animation is now regular keyframes`);
+    return true;
+  }
+  function deletePreset(key, dir) {
+    const label = animLabel(key, dir);
+    state[key].anim[dir].type = 'none';
+    selPreset = null;
+    changed({ sync: true });
+    toast(`${LAYER_NAMES[key]} ${dir} animation removed (${label}). It now ${dir === 'in' ? 'cuts in' : 'cuts out'}. Undo brings it back.`);
+  }
+
   // ---------- Keyframe inspector bar ----------
   const keyBar = $('#keyBar');
   function updateKeyBar() {
-    if (!selKey || !isKeyed(selKey.path) || !keysOf(selKey.path).includes(selKey.k)) { keyBar.hidden = true; return; }
-    keyBar.hidden = false;
+    if (selPreset && (!advanced || state[selPreset.key].anim[selPreset.dir].type === 'none')) selPreset = null;
+    const keyOk = selKey && isKeyed(selKey.path) && keysOf(selKey.path).includes(selKey.k);
+    if (!keyOk) selKey = null;
+    $('#kbKeyCtl').hidden = !keyOk; $('#kbPreCtl').hidden = !selPreset;
+    keyBar.hidden = !keyOk && !selPreset;
+    if (selPreset) {
+      const { key, dir } = selPreset, A = state[key].anim[dir];
+      $('#kbLabel').textContent = `◆ ${LAYER_NAMES[key]} · ${dir === 'in' ? 'In' : 'Out'} animation`;
+      const sel = $('#kpType');
+      if (sel.dataset.for !== key) fillSelect(sel, Object.entries(key === 'backdrop' ? Engine.BACKDROP_ANIMS : Engine.TEXT_ANIMS).filter(([k]) => k !== 'none'));
+      sel.dataset.for = key; sel.value = A.type;
+      $('#kbDelete').title = 'Remove this animation so the layer cuts in/out (Delete)';
+      if (document.activeElement !== $('#kpDur')) $('#kpDur').value = A.duration;
+      $('#kpEase').value = A.easing;
+      const conv = !!CONVERTIBLE[A.type];
+      $('#kpConvert').disabled = !conv;
+      $('#kpConvert').title = conv ? 'Replace this preset with position/scale/opacity keyframes you can edit one by one'
+        : 'Wipes, masks and letter animations can’t be turned into keyframes';
+      return;
+    }
+    if (!keyOk) return;
     const { path, k } = selKey;
+    $('#kbDelete').title = 'Delete keyframe (Delete)';
     $('#kbLabel').textContent = `◆ ${keyLabel(path)}`;
     $('#kbTime').textContent = `${k.t.toFixed(2)}s`;
     const vi = $('#kbValue');
@@ -1228,17 +1379,35 @@
   }
   fillSelect($('#kbEase'), [['easeInOutCubic', 'Easy ease'], ['linear', 'Linear'], ['easeOutCubic', 'Ease out'], ['easeInCubic', 'Ease in'], ['hold', 'Hold (jump)'],
     { group: 'More', items: Object.entries(EASING_LABELS).filter(([k]) => k !== 'custom' && !['linear', 'easeOutCubic', 'easeInCubic', 'easeInOutCubic'].includes(k)) }]);
+  fillSelect($('#kpEase'), EASING_LABELS);
   $('#kbValue').addEventListener('input', (e) => {
     if (!selKey) return;
     selKey.k.v = e.target.type === 'color' ? e.target.value : +e.target.value;
     changed({ sync: true });
   });
   $('#kbEase').addEventListener('change', (e) => { if (selKey) { selKey.k.e = e.target.value; changed(); updateKeyBar(); drawTimeline(); } });
-  $('#kbDelete').onclick = () => { if (selKey) { removeKey(selKey.path, selKey.k); changed({ sync: true }); updateKeyBar(); } };
+  $('#kbDelete').onclick = () => {
+    if (selPreset) return deletePreset(selPreset.key, selPreset.dir);
+    if (selKey) { removeKey(selKey.path, selKey.k); changed({ sync: true }); updateKeyBar(); }
+  };
+  $('#kpType').addEventListener('change', (e) => { if (selPreset) { state[selPreset.key].anim[selPreset.dir].type = e.target.value; changed({ sync: true }); } });
+  $('#kpDur').addEventListener('input', (e) => {
+    if (!selPreset || !(+e.target.value > 0)) return;
+    state[selPreset.key].anim[selPreset.dir].duration = Math.max(0.05, Math.min(state.comp.duration, +e.target.value));
+    changed({ sync: true });
+  });
+  $('#kpEase').addEventListener('change', (e) => { if (selPreset) { state[selPreset.key].anim[selPreset.dir].easing = e.target.value; changed({ sync: true }); } });
+  $('#kpConvert').onclick = () => { if (selPreset) convertPreset(selPreset.key, selPreset.dir); };
   $('#kbPrev').onclick = () => jumpKey(-1);
   $('#kbNext').onclick = () => jumpKey(1);
   function jumpKey(dir) {
-    const all = [...new Set(keyRows().flatMap((p) => state.keys[p].map((k) => k.t)))].sort((a, b) => a - b);
+    const times = keyRows().flatMap((p) => state.keys[p].map((k) => k.t));
+    if (advanced) for (const [key] of TRACKS) {
+      const a = state[key].anim, sp = Engine.timingSpans(a, state.comp.duration);
+      if (a.in.type !== 'none') times.push(sp.inStart, sp.inEnd);
+      if (a.out.type !== 'none') times.push(sp.outStart, sp.outEnd);
+    }
+    const all = [...new Set(times)].sort((a, b) => a - b);
     const t = dir > 0 ? all.find((x) => x > time + 1e-4) : [...all].reverse().find((x) => x < time - 1e-4);
     if (t !== undefined) { setPlaying(false); setTime(t); }
   }
@@ -1505,7 +1674,8 @@
     else if (e.key === 'ArrowLeft') $('#btnPrevFrame').click();
     else if (e.key === 'ArrowRight') $('#btnNextFrame').click();
     else if (e.key === 'Home') $('#btnStart').click();
-    else if (e.key === 'Escape') { selKey = null; updateKeyBar(); selectLayer(null); }
+    else if (e.key === 'Escape') { selKey = null; selPreset = null; updateKeyBar(); drawTimeline(); selectLayer(null); }
+    else if ((e.key === 'Delete' || e.key === 'Backspace') && selPreset) { e.preventDefault(); deletePreset(selPreset.key, selPreset.dir); }
     else if ((e.key === 'Delete' || e.key === 'Backspace') && selKey) { e.preventDefault(); removeKey(selKey.path, selKey.k); changed({ sync: true }); updateKeyBar(); }
     else if (e.key.toLowerCase() === 'j') jumpKey(-1);
     else if (e.key.toLowerCase() === 'k') jumpKey(1);
