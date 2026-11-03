@@ -2,3 +2,4 @@ node_modules/
 dist/
 test/out/
 test/*.png
+test/out3/

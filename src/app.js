@@ -99,7 +99,7 @@
     return f.family;
   }
   async function ensureFonts(s = state) {
-    const loads = [s.title, s.subtitle].filter((t) => t.text).map((t) =>
+    const loads = [s.title, s.subtitle, ...Object.values(s.layers || {}).filter((l) => l.kind === 'text')].filter((t) => t.text).map((t) =>
       document.fonts.load(`${t.italic ? 'italic ' : ''}${t.weight} ${t.size}px "${t.font}"`, t.text + 'Hgjpqy').catch(() => {}));
     await Promise.all(loads);
   }

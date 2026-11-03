@@ -28,6 +28,18 @@ contextBridge.exposeInMainWorld('api', {
     read: (p) => ipcRenderer.invoke('project:read', p),
     onOpenPath: (cb) => ipcRenderer.on('project:openPath', (_e, p) => cb(p)),
   },
+  live: {
+    start: (opts) => ipcRenderer.invoke('live:start', opts),
+    stop: () => ipcRenderer.invoke('live:stop'),
+    update: (state) => ipcRenderer.invoke('live:update', state),
+    cue: (action) => ipcRenderer.invoke('live:cue', action),
+    status: () => ipcRenderer.invoke('live:status'),
+    onCued: (cb) => ipcRenderer.on('live:cued', (_e, a) => cb(a)),
+  },
+  updates: {
+    check: () => ipcRenderer.invoke('update:check'),
+    open: (url) => ipcRenderer.invoke('shell:openExternal', url),
+  },
   onMenu: (cb) => ipcRenderer.on('menu', (_e, cmd) => cb(cmd)),
   reveal: (p) => ipcRenderer.invoke('shell:reveal', p),
   info: () => ipcRenderer.invoke('app:info'),

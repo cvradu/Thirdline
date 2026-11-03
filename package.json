@@ -24,6 +24,7 @@
     "productName": "Thirdline",
     "files": [
       "main.js",
+      "live-server.js",
       "preload.js",
       "src/**/*",
       "package.json"

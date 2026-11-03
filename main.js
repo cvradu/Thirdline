@@ -3,6 +3,7 @@ const { app, BrowserWindow, ipcMain, dialog, shell, Menu } = require('electron')
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
+const { createLiveServer } = require('./live-server');
 
 function ffmpegPath() {
   if (process.env.L3RD_FFMPEG) return process.env.L3RD_FFMPEG;
@@ -271,3 +272,36 @@ ipcMain.handle('shell:reveal', (_e, p) => shell.showItemInFolder(p));
 ipcMain.handle('app:info', () => ({ version: app.getVersion(), ffmpeg: ffmpegPath(), platform: process.platform }));
 
 module.exports = { ffmpegArgs };
+
+// ---------- Live output (OBS browser source) ----------
+const live = createLiveServer({
+  srcDir: path.join(__dirname, 'src'),
+  fontsDir,
+  onCue: (action) => win && win.webContents.send('live:cued', action),
+});
+const userFontList = () => { try { return fs.readdirSync(fontsDir()).filter((f) => /\.(ttf|otf|woff2?)$/i.test(f)).map((file) => ({ file, family: fontEntry(file).family })); } catch { return []; } };
+ipcMain.handle('live:start', async (_e, opts = {}) => live.start(opts.port || 7461));
+ipcMain.handle('live:stop', () => { live.stop(); return true; });
+ipcMain.handle('live:update', (_e, state) => { live.update(state, userFontList()); return live.clients; });
+ipcMain.handle('live:cue', (_e, action) => { live.cue(action); return live.clients; });
+ipcMain.handle('live:status', () => ({ running: live.running, clients: live.clients }));
+app.on('before-quit', () => live.stop());
+
+// ---------- Update check (GitHub releases) ----------
+// The app is not signed with an Apple Developer ID, so it can't replace itself; instead it
+// tells you a new version exists and opens the right download.
+const RELEASES = 'https://api.github.com/repos/cvradu/Thirdline/releases/latest';
+const newer = (a, b) => { const pa = a.split('.').map(Number), pb = b.split('.').map(Number); for (let i = 0; i < 3; i++) { if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) > (pb[i] || 0); } return false; };
+ipcMain.handle('update:check', async () => {
+  try {
+    const r = await fetch(RELEASES, { headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Thirdline' } });
+    if (!r.ok) return { error: `HTTP ${r.status}` };
+    const rel = await r.json();
+    const latest = String(rel.tag_name || '').replace(/^v/, '');
+    const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
+    const ext = process.platform === 'darwin' ? '.dmg' : process.platform === 'win32' ? '.exe' : '.AppImage';
+    const asset = (rel.assets || []).find((a) => a.name.endsWith(ext) && (process.platform !== 'darwin' || a.name.includes(arch)));
+    return { current: app.getVersion(), latest, available: !!latest && newer(latest, app.getVersion()), url: asset ? asset.browser_download_url : rel.html_url, page: rel.html_url, notes: rel.body || '' };
+  } catch (e) { return { error: String(e.message || e) }; }
+});
+ipcMain.handle('shell:openExternal', (_e, url) => { if (/^https:\/\/github\.com\/cvradu\/Thirdline\//.test(url)) shell.openExternal(url); });
