@@ -49,7 +49,7 @@
         read: async () => null,
         onOpenPath: () => {},
       },
-      mogrt: { findAE: async () => null, run: async () => ({ error: 'no-ae' }), revealScript: async () => {} },
+      mogrt: { findAE: async () => null, chooseAE: async () => null, run: async () => ({ error: 'no-ae' }), revealScript: async () => {} },
       onMenu: () => {},
       reveal: async () => {},
       info: async () => ({ platform: 'browser' }),
@@ -1568,6 +1568,9 @@
     if (item.builtin !== undefined) {
       next.title.text = state.title.text; next.subtitle.text = state.subtitle.text;
     }
+    // With a brand kit on, every style previews in the brand's colours and fonts.
+    const br = activeBrand();
+    if (br && item.builtin !== undefined) applyBrandTo(next, br, { logo: false });
     return next;
   }
   function thumbFor(st) {
@@ -1603,6 +1606,87 @@
     }
     g.append(el('button', { type: 'button', class: 'st add', title: 'Save the current design so you can reuse it', onclick: saveStyle }, '+ Save as my style'));
   }
+  // ---------- Brand kits ----------
+  // A brand = colours + fonts (+ an optional logo), stored on this computer and applied to any style.
+  const BRANDS_KEY = 'thirdline:brands';
+  let brands = [];
+  try { brands = JSON.parse(localStorage.getItem(BRANDS_KEY) || '[]') || []; } catch {}
+  const saveBrands = () => { try { localStorage.setItem(BRANDS_KEY, JSON.stringify(brands)); return true; } catch (e) { toast('Could not save the brand kit (logo too large?)'); return false; } };
+  const activeBrand = () => brands.find((b) => b.id === (state.ui && state.ui.brand)) || null;
+  function brandFromState(name) {
+    const bd = state.backdrop;
+    const logoLy = Object.values(state.layers || {}).find((l) => l.kind === 'image' && l.brandLogo) || Object.values(state.layers || {}).find((l) => l.kind === 'image');
+    const fams = [state.title.font, state.subtitle.font];
+    return {
+      id: 'b' + Date.now().toString(36), name,
+      bg: bd.fill, bg2: bd.fill2, text: state.title.color, sub: state.subtitle.color, accent: bd.accentColor,
+      titleFont: state.title.font, titleWeight: state.title.weight, subFont: state.subtitle.font, subWeight: state.subtitle.weight,
+      fonts: userFonts.filter((u) => fams.includes(u.family)).map((u) => ({ family: u.family, file: u.file, data: u.data })),
+      logo: logoLy && logoLy.src ? { src: logoLy.src, name: logoLy.file || logoLy.name || 'Logo', w: logoLy.w } : null,
+    };
+  }
+  // Puts a brand on a design: colours, fonts, and (optionally) its logo as a layer.
+  function applyBrandTo(st, br, { logo = true } = {}) {
+    const bd = st.backdrop, oldAccent = bd.accentColor;
+    if (br.bg) bd.fill = br.bg;
+    if (br.bg2 && bd.fillType && bd.fillType !== 'solid') bd.fill2 = br.bg2;
+    if (br.accent) bd.accentColor = br.accent;
+    if (br.text) st.title.color = br.text;
+    if (br.sub) st.subtitle.color = br.sub;
+    const w = (fam, want) => (BUILTIN_FONTS[fam] ? bestWeight(fam, want) : want);
+    if (br.titleFont) Object.assign(st.title, { font: br.titleFont, weight: w(br.titleFont, br.titleWeight || st.title.weight) });
+    if (br.subFont) Object.assign(st.subtitle, { font: br.subFont, weight: w(br.subFont, br.subWeight || st.subtitle.weight) });
+    // Shapes that used the old accent colour follow the brand accent.
+    for (const ly of Object.values(st.layers || {})) if (ly.kind !== 'image' && ly.color && oldAccent && ly.color.toLowerCase() === oldAccent.toLowerCase() && br.accent) ly.color = br.accent;
+    if (logo && br.logo) {
+      st.layers = st.layers || {};
+      let id = Object.keys(st.layers).find((k) => st.layers[k].brandLogo);
+      if (id) Object.assign(st.layers[id], { src: br.logo.src, file: br.logo.name });
+      else {
+        id = newId();
+        st.layers[id] = Presets.newLayer('image', { src: br.logo.src, file: br.logo.name, name: 'Logo', brandLogo: true, w: br.logo.w || 120 });
+        st.order = [...Engine.layerOrder(st).filter((x) => x !== id), id];
+      }
+    }
+    st.ui = { ...(st.ui || {}), brand: br.id };
+  }
+  async function useBrand(br) {
+    for (const f of br.fonts || []) await addUserFont(f);
+    applyBrandTo(state, br);
+    changed({ sync: true }); queueGallery(); renderBrandMenu();
+    toast(`Brand “${br.name}” applied`);
+  }
+  async function saveBrand() {
+    const cur = activeBrand();
+    const name = await promptDialog('Save these colours, fonts and logo as a brand kit', cur ? cur.name : 'My brand');
+    if (!name) return;
+    const b = brandFromState(name);
+    const i = brands.findIndex((x) => x.name === name);
+    if (i >= 0) { b.id = brands[i].id; brands[i] = b; } else brands.push(b);
+    if (!saveBrands()) return;
+    state.ui.brand = b.id; changed(); renderBrandMenu(); queueGallery();
+    toast(`Saved brand “${name}”${b.logo ? ' (with logo)' : ''}`);
+  }
+  function renderBrandMenu() {
+    const m = $('#brandMenu'); m.innerHTML = '';
+    const cur = activeBrand();
+    $('#btnBrand').textContent = cur ? `Brand: ${cur.name} ▾` : 'Brand ▾';
+    $('#btnBrand').classList.toggle('active', !!cur);
+    if (!brands.length) m.append(el('div', { class: 'empty' }, 'No brand kits yet. Set up your colours, fonts and logo, then save them here.'));
+    for (const b of brands) {
+      m.append(el('button', { type: 'button', class: 'brand-item' + (cur && cur.id === b.id ? ' on' : ''), title: 'Apply this brand to the current design', onclick: () => { m.hidden = true; useBrand(b); } },
+        el('span', { class: 'sw' }, ...[b.bg, b.text, b.accent].filter(Boolean).map((c) => el('i', { style: `background:${c}` }))),
+        el('span', { class: 'nm' }, b.name),
+        b.logo ? el('img', { src: b.logo.src, alt: '' }) : null,
+        el('span', { class: 'x', title: 'Delete this brand kit', onclick: (e) => { e.stopPropagation(); if (!confirm(`Delete the brand kit “${b.name}”?`)) return; brands = brands.filter((x) => x.id !== b.id); saveBrands(); if (state.ui.brand === b.id) delete state.ui.brand; renderBrandMenu(); queueGallery(); } }, '✕')));
+    }
+    m.append(el('hr'));
+    m.append(el('button', { type: 'button', onclick: () => { m.hidden = true; saveBrand(); } }, cur ? `Update “${cur.name}” from this design…` : 'Save this design’s colours, fonts and logo as a brand…'));
+    if (cur) m.append(el('button', { type: 'button', onclick: () => { m.hidden = true; delete state.ui.brand; changed(); renderBrandMenu(); queueGallery(); } }, 'Stop using the brand (keeps the current look)'));
+  }
+  $('#btnBrand').onclick = (e) => { e.stopPropagation(); renderBrandMenu(); $('#brandMenu').hidden = !$('#brandMenu').hidden; };
+  document.addEventListener('pointerdown', (e) => { if (!$('#brandMenu').hidden && !e.target.closest('#brandMenu') && !e.target.closest('#btnBrand')) $('#brandMenu').hidden = true; });
+
   function applyStyle(it) {
     let next;
     if (it.builtin !== undefined) {
@@ -1618,6 +1702,8 @@
       replaceState(next);
       setHold(hold);
       if (state.ui.pos && state.ui.pos !== 'bl') placeAt(state.ui.pos);
+      const br = activeBrand();
+      if (br) { applyBrandTo(state, br, { logo: false }); changed({ sync: true }); }
     } else {
       next = clone(it.state);
       next.ui = { ...(next.ui || {}), style: `u:${it.name}` };
@@ -1934,6 +2020,7 @@
   const tl = $('#timeline'), tctx = tl.getContext('2d');
   const TL = { left: 86, right: 16, ruler: 22, rowH: 28, keyH: 18, extra: 1.15 };
   let tlSpan = 0; // view length frozen while the end handle is dragged
+  const tlView = { z: 1, t0: 0 }; // timeline zoom (1 = whole animation) and the first visible time
   const collapsed = {}; // layer → true when its keyframe rows are folded away
   let selPreset = null; // { key, dir: 'in' | 'out' } — a preset in/out animation picked on the timeline
   function keyRows() {
@@ -1983,10 +2070,14 @@
     const w = tl.clientWidth, h = tl.clientHeight;
     if (tl.width !== Math.round(w * dpr)) { tl.width = Math.round(w * dpr); tl.height = Math.round(h * dpr); }
     // The view runs a bit past the end so the end-of-animation handle can be dragged out.
-    const span = tlSpan || state.comp.duration * TL.extra;
-    const sx = (t) => TL.left + (t / span) * (w - TL.left - TL.right);
-    const st = (x) => ((x - TL.left) / (w - TL.left - TL.right)) * span;
-    return { dpr, w, h, sx, st, span };
+    // Alt/Option+scroll zooms in (tlView.z), scrolling sideways pans (tlView.t0).
+    const full = tlSpan || state.comp.duration * TL.extra;
+    const span = full / tlView.z;
+    tlView.t0 = Math.max(0, Math.min(full - span, tlView.t0));
+    const t0 = tlView.t0, W = w - TL.left - TL.right;
+    const sx = (t) => TL.left + ((t - t0) / span) * W;
+    const st = (x) => t0 + ((x - TL.left) / W) * span;
+    return { dpr, w, h, sx, st, span, full, t0 };
   }
   function diamond(g, x, cy, sz) { g.beginPath(); g.moveTo(x, cy - sz); g.lineTo(x + sz, cy); g.lineTo(x, cy + sz); g.lineTo(x - sz, cy); g.closePath(); g.fill(); }
   function fitText(g, s, max) { while (g.measureText(s).width > max && s.length > 4) s = s.slice(0, -2) + '…'; return s; }
@@ -1994,17 +2085,34 @@
     const { dpr, w, h, sx } = tlGeom();
     const g = tctx; g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, w, h);
+    if (tlView.z <= 1.0001 && tlView.t0 === 0) return drawTimelineBody(sx);
+    // Zoomed: draw the tracks clipped to the track area, then the labels with the tracks pushed away.
+    g.save(); g.beginPath(); g.rect(TL.left - 6, 0, w - TL.left + 6, h); g.clip(); drawTimelineBody(sx); g.restore();
+    g.save(); g.beginPath(); g.rect(0, 0, TL.left - 6, h); g.clip(); drawTimelineBody(() => -1e6, true); g.restore();
+    // Zoom readout
+    const msg = `${Math.round(tlView.z * 100)}% · Alt+scroll to zoom · double-click the ruler to fit`;
+    g.font = '10px -apple-system, sans-serif';
+    const mw = g.measureText(msg).width + 10;
+    g.fillStyle = '#12151cdd'; g.fillRect(w - TL.right - mw, h - 17, mw, 15);
+    g.fillStyle = '#f59e0b'; g.fillText(msg, w - TL.right - mw + 5, h - 6);
+  }
+  function drawTimelineBody(sx, labelsOnly = false) {
+    const { w, h } = tlGeom();
+    const g = tctx;
     const D = state.comp.duration;
     // Ruler
     g.fillStyle = '#8a93a6'; g.font = '10px ui-monospace, monospace'; g.strokeStyle = '#262b37';
-    const step = D > 15 ? 2 : D > 6 ? 1 : 0.5;
-    for (let t = 0; t <= D + 1e-6; t += step) {
+    // Ruler ticks at least ~55px apart, finer as you zoom in.
+    const pps = (sx(1) - sx(0)) || 1;
+    const step = [1 / state.comp.fps, 0.1, 0.25, 0.5, 1, 2, 5, 10].find((v) => v * pps >= 55) || 10;
+    for (let i = 0, t = 0; t <= D + 1e-6; t = ++i * step) {
       const x = sx(t);
+      if (x < TL.left - 40 || x > w + 40) continue;
       g.beginPath(); g.moveTo(x, TL.ruler - 6); g.lineTo(x, h); g.stroke();
-      g.fillText(`${+t.toFixed(1)}s`, x + 3, 12);
+      g.fillText(step < 0.1 ? `f${Math.round(t * state.comp.fps)}` : `${+t.toFixed(2)}s`, x + 3, 12);
     }
     // Past the end: shaded, with a handle on the ruler to change the length.
-    const xEnd = sx(D);
+    const xEnd = labelsOnly ? w + 1e6 : sx(D);
     g.fillStyle = '#00000055'; g.fillRect(xEnd, 0, w - xEnd, h);
     g.strokeStyle = '#f59e0b'; g.lineWidth = 1.5; g.beginPath(); g.moveTo(xEnd, 0); g.lineTo(xEnd, h); g.stroke(); g.lineWidth = 1;
     g.fillStyle = '#f59e0b'; g.beginPath(); g.roundRect ? g.roundRect(xEnd - 5, 2, 10, TL.ruler - 6, 3) : g.rect(xEnd - 5, 2, 10, TL.ruler - 6); g.fill();
@@ -2085,6 +2193,7 @@
         }
       }
     }
+    if (labelsOnly) return;
     // Box selection
     if (tlDrag && tlDrag.box) {
       const x = Math.min(tlDrag.x0, tlDrag.x1), y = Math.min(tlDrag.y0, tlDrag.y1);
@@ -2098,7 +2207,7 @@
     g.strokeStyle = '#fff'; g.lineWidth = 1.5; g.beginPath(); g.moveTo(px, 0); g.lineTo(px, h); g.stroke(); g.lineWidth = 1;
     g.fillStyle = '#fff'; g.beginPath(); g.moveTo(px - 5, 0); g.lineTo(px + 5, 0); g.lineTo(px, 7); g.fill();
     g.fillStyle = '#596176'; g.font = '10px -apple-system, sans-serif';
-    g.fillText(advanced
+    if (tlView.z <= 1.0001) g.fillText(advanced
       ? 'Click ◆ or a ramp to edit · Shift+click or drag a box to select several ◆ · drag ◆ to retime · ▾ folds a layer’s keys'
       : 'Ramp: transition length · outer edge: in/out point · middle: move layer', TL.left, h - 6);
   }
@@ -2117,7 +2226,7 @@
       return;
     }
     if (row && row.type === 'group') { if (mx < TL.left) { collapsed.other = !collapsed.other; resizeTimeline(); release(); return; } }
-    if (row && row.type === 'key') {
+    if (row && row.type === 'key' && mx >= TL.left - 6) {
       const ks = state.keys[row.path];
       let best = null, bd = 7;
       for (const k of ks) { const d = Math.abs(sx(k.t) - mx); if (d < bd) { bd = d; best = k; } }
@@ -2254,6 +2363,31 @@
     tl.style.cursor = cur; tl.title = tip;
   });
   new ResizeObserver(drawTimeline).observe(tl);
+  // Alt/Option + scroll (or a trackpad pinch) zooms around the mouse; sideways or Shift + scroll pans.
+  tl.addEventListener('wheel', (e) => {
+    const g0 = tlGeom(); const r = tl.getBoundingClientRect(); const mx = e.clientX - r.left;
+    if (e.altKey || e.ctrlKey) {
+      e.preventDefault();
+      const tm = g0.st(Math.max(TL.left, mx));
+      const d = e.deltaY || e.deltaX;
+      tlView.z = Math.max(1, Math.min(80, tlView.z * Math.exp(-d * (e.ctrlKey ? 0.01 : 0.0025))));
+      const span = g0.full / tlView.z;
+      tlView.t0 = tm - ((Math.max(TL.left, mx) - TL.left) / (g0.w - TL.left - TL.right)) * span;
+      if (tlView.z === 1) tlView.t0 = 0;
+      drawTimeline();
+      return;
+    }
+    const dx = e.shiftKey ? e.deltaY || e.deltaX : Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : 0;
+    if (dx && tlView.z > 1) {
+      e.preventDefault();
+      tlView.t0 += (dx / (g0.w - TL.left - TL.right)) * g0.span;
+      drawTimeline();
+    }
+  }, { passive: false });
+  tl.addEventListener('dblclick', (e) => {
+    const r = tl.getBoundingClientRect();
+    if (e.clientY - r.top < TL.ruler && tlView.z > 1) { tlView.z = 1; tlView.t0 = 0; drawTimeline(); }
+  });
 
   // ---------- Preset animations as keyframes ----------
   const animLabel = (key, dir) => {
@@ -2914,11 +3048,20 @@
     $('#mogrtAE').textContent = ae ? ae.name : 'After Effects';
     if (!ae) {
       $('#mogrtError').hidden = false;
-      $('#mogrtError').textContent = 'After Effects isn’t installed on this computer (Thirdline looked in Applications). Install it from Creative Cloud, or export ProRes 4444 for Premiere instead.';
+      $('#mogrtError').textContent = 'Thirdline couldn’t find After Effects in Applications. (The “After Effects Render Engine” that comes with Premiere can’t build templates.) If it’s installed somewhere else, use “change…” to pick it; otherwise install it from Creative Cloud, or export ProRes 4444 for Premiere instead.';
       $('#mogrtGo').disabled = true;
     }
     if (!mDlg.open) mDlg.showModal();
   }
+  $('#mogrtChange').onclick = async (e) => {
+    e.preventDefault();
+    if (!api.mogrt.chooseAE) return;
+    const ae = await api.mogrt.chooseAE();
+    if (ae && ae.error) { $('#mogrtError').hidden = false; $('#mogrtError').textContent = ae.error; return; }
+    $('#mogrtError').hidden = true;
+    $('#mogrtAE').textContent = ae ? ae.name : 'After Effects';
+    $('#mogrtGo').disabled = !ae;
+  };
   $('#mogrtFromExport').onclick = (e) => { e.preventDefault(); dlg.close(); openMogrt(); };
   $('#mogrtCancel').onclick = () => mDlg.close();
   $('#mogrtGo').onclick = async () => {
@@ -3096,6 +3239,7 @@
     for (const f of await api.fonts.list()) await addUserFont(f);
     buildInspector();
     buildEasyPanel();
+    renderBrandMenu();
     renderLayerList(); renderAnimLib();
     addStructureSync(renderLayerList);
     setAdvanced(advanced);
@@ -3109,7 +3253,7 @@
     refreshGallery();
     window.__l3rd = { get state() { return state; }, setTime, replaceState, render: drawPreview, selectLayer, addLayer, loadCSV, openBatch, openMogrt,
       selKeyCount: () => selKeys.length, selKeyTimes: () => selKeys.map((s) => s.k.t),
-      tlDebug: () => { const g = tlGeom(); return { rows: timelineRows(), left: TL.left, right: TL.right, w: g.w, span: g.span }; } };
+      tlDebug: () => { const g = tlGeom(); return { rows: timelineRows(), left: TL.left, right: TL.right, w: g.w, span: g.span, t0: g.t0, z: tlView.z }; } };
     setTimeout(() => checkUpdates(false).catch(() => {}), 3000);
   }
   boot();

@@ -322,8 +322,17 @@ ipcMain.handle('shell:openExternal', (_e, url) => { if (/^https:\/\/github\.com\
 // Thirdline can't write .mogrt files itself (only Adobe's apps can), so it rebuilds the design in
 // After Effects with a script and lets After Effects export the template.
 const os = require('os');
+// The main After Effects app only: the Render Engine (and other helpers) can't run scripts.
+const NOT_AE = /render engine|aerender|uninstall|helper|crash|plug-?in/i;
+const aeChoiceFile = () => path.join(userDir(), 'after-effects.json');
+function aeFromPath(p) {
+  const name = path.basename(p).replace(/\.(app|exe)$/i, '');
+  return { app: p, name: /afterfx/i.test(name) ? path.basename(path.dirname(path.dirname(p))) : name, chosen: true };
+}
 function findAfterEffects() {
   if (process.env.L3RD_AE_FAKE) return { app: process.env.L3RD_AE_FAKE, name: 'Adobe After Effects (test)', fake: true };
+  // One the user picked by hand wins.
+  try { const c = JSON.parse(fs.readFileSync(aeChoiceFile(), 'utf8')); if (c.app && fs.existsSync(c.app)) return aeFromPath(c.app); } catch {}
   const found = [];
   if (process.platform === 'darwin') {
     let dirs = [];
@@ -331,27 +340,42 @@ function findAfterEffects() {
     for (const d of dirs) {
       const dir = path.join('/Applications', d);
       try {
-        for (const f of fs.readdirSync(dir)) if (/^Adobe After Effects.*\.app$/i.test(f)) found.push({ app: path.join(dir, f), name: f.replace(/\.app$/i, '') });
+        for (const f of fs.readdirSync(dir)) if (/^Adobe After Effects.*\.app$/i.test(f) && !NOT_AE.test(f)) found.push({ app: path.join(dir, f), name: f.replace(/\.app$/i, '') });
       } catch {}
     }
+    for (const d of dirs) if (/\.app$/i.test(d) && !NOT_AE.test(d)) found.push({ app: path.join('/Applications', d), name: d.replace(/\.app$/i, '') });
   } else if (process.platform === 'win32') {
     const roots = [process.env.ProgramFiles, process.env['ProgramW6432']].filter(Boolean);
     for (const r of [...new Set(roots)]) {
       const adobe = path.join(r, 'Adobe');
       let dirs = [];
-      try { dirs = fs.readdirSync(adobe).filter((d) => /^Adobe After Effects/i.test(d)); } catch {}
+      try { dirs = fs.readdirSync(adobe).filter((d) => /^Adobe After Effects/i.test(d) && !NOT_AE.test(d)); } catch {}
       for (const d of dirs) {
         const exe = path.join(adobe, d, 'Support Files', 'AfterFX.exe');
         if (fs.existsSync(exe)) found.push({ app: exe, name: d });
       }
     }
   }
-  // Newest first ("2025" > "2024" > "CC 2019").
+  // Newest first ("2025" > "2024" > "CC 2019"); betas after releases.
   const year = (n) => +((n.match(/(20\d\d)/) || [])[1] || 0);
-  found.sort((a, b) => year(b.name) - year(a.name) || b.name.localeCompare(a.name));
+  const beta = (n) => (/beta/i.test(n) ? 1 : 0);
+  found.sort((a, b) => beta(a.name) - beta(b.name) || year(b.name) - year(a.name) || b.name.localeCompare(a.name));
   return found[0] || null;
 }
 ipcMain.handle('mogrt:findAE', () => findAfterEffects());
+ipcMain.handle('mogrt:chooseAE', async () => {
+  const mac = process.platform === 'darwin';
+  const r = await dialog.showOpenDialog(win, {
+    title: 'Choose After Effects', defaultPath: mac ? '/Applications' : (process.env.ProgramFiles || 'C:\\Program Files') + '\\Adobe',
+    properties: ['openFile'], filters: mac ? [{ name: 'Applications', extensions: ['app'] }] : [{ name: 'AfterFX.exe', extensions: ['exe'] }],
+  });
+  if (r.canceled || !r.filePaths[0]) return findAfterEffects();
+  const p = r.filePaths[0];
+  if (NOT_AE.test(path.basename(p))) return { error: `${path.basename(p)} can't run scripts. Pick “Adobe After Effects 20xx” itself.` };
+  fs.mkdirSync(userDir(), { recursive: true });
+  fs.writeFileSync(aeChoiceFile(), JSON.stringify({ app: p }));
+  return aeFromPath(p);
+});
 
 // PostScript name (name ID 6) of a .ttf / .otf file.
 function fontPostScriptName(buf) {
@@ -449,7 +473,7 @@ function runInAfterEffects(ae, jsx) {
     let child;
     if (process.platform === 'darwin') {
       const esc = (s) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-      child = spawn('osascript', ['-e', 'with timeout of 3600 seconds', '-e', `tell application "${esc(ae.name)}"`, '-e', 'activate', '-e', `DoScriptFile "${esc(jsx)}"`, '-e', 'end tell', '-e', 'end timeout']);
+      child = spawn('osascript', ['-e', 'with timeout of 3600 seconds', '-e', `tell application "${esc(ae.app)}"`, '-e', 'activate', '-e', `DoScriptFile "${esc(jsx)}"`, '-e', 'end tell', '-e', 'end timeout']);
     } else if (process.platform === 'win32') {
       child = spawn(ae.app, ['-r', jsx], { detached: true, stdio: 'ignore' });
       child.unref();
@@ -463,7 +487,9 @@ function runInAfterEffects(ae, jsx) {
       clearTimeout(timer);
       if (code && err) {
         const denied = /-1743|not authori[sz]ed|Not allowed/i.test(err);
-        resolve({ error: denied ? 'macOS blocked Thirdline from controlling After Effects. Allow it in System Settings › Privacy & Security › Automation, then try again.' : err.trim() });
+        const noScripts = /-2741|-1708|-1728|doesn.t understand/i.test(err);
+        resolve({ error: denied ? 'macOS blocked Thirdline from controlling After Effects. Allow it in System Settings › Privacy & Security › Automation, then try again.'
+          : noScripts ? `“${ae.name}” didn't accept the script. Use “Change…” to pick the After Effects app itself (not the Render Engine). (${err.trim()})` : err.trim() });
       } else resolve({ ok: true });
     });
   });

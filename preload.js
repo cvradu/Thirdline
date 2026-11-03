@@ -40,6 +40,7 @@ contextBridge.exposeInMainWorld('api', {
   },
   mogrt: {
     findAE: () => ipcRenderer.invoke('mogrt:findAE'),
+    chooseAE: () => ipcRenderer.invoke('mogrt:chooseAE'),
     run: (opts) => ipcRenderer.invoke('mogrt:export', opts),
     revealScript: (p) => ipcRenderer.invoke('mogrt:revealScript', p),
   },

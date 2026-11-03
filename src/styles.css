@@ -295,3 +295,16 @@ details.parts > summary { cursor: pointer; color: var(--muted); font-size: 12px;
 details.parts > summary::before { content: '▸ '; } details.parts[open] > summary::before { content: '▾ '; }
 .part-head { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; color: var(--text); margin: 10px 0 2px; text-transform: uppercase; letter-spacing: .04em; }
 .part-head .dot { width: 8px; height: 8px; border-radius: 50%; }
+
+/* Brand kits */
+.brand-menu { min-width: 300px; }
+.brand-menu .brand-item { display: flex; align-items: center; gap: 8px; }
+.brand-menu .brand-item .sw { display: inline-flex; gap: 2px; }
+.brand-menu .brand-item .sw i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; border: 1px solid #0006; }
+.brand-menu .brand-item .nm { flex: 1; }
+.brand-menu .brand-item img { height: 16px; max-width: 40px; object-fit: contain; }
+.brand-menu .brand-item .x { opacity: .5; padding: 0 4px; }
+.brand-menu .brand-item .x:hover { opacity: 1; }
+.brand-menu .brand-item.on { background: #f59e0b22; }
+.brand-menu .empty { padding: 8px 10px; color: var(--muted); font-size: 12px; }
+#btnBrand.active { color: var(--accent); }

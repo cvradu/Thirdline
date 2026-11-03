@@ -27,6 +27,10 @@
         <button id="btnUpdates">Check for updates…</button>
       </div>
     </div>
+    <div class="menu-wrap">
+      <button id="btnBrand" class="ghost" title="Brand kits: your colours, fonts and logo, applied to any style in one click">Brand ▾</button>
+      <div class="dropdown brand-menu" id="brandMenu" hidden></div>
+    </div>
     <span class="docname" id="docName">Untitled</span>
     <a class="update-pill" id="updatePill" hidden></a>
     <span class="spacer"></span>
@@ -208,7 +212,7 @@
       <h2>Export as .mogrt</h2>
       <p class="sub">A .mogrt is a Motion Graphics template: Premiere Pro editors can change the text and colours in the Essential Graphics panel. Only After Effects can make one, so Thirdline will:</p>
       <ol class="sub" style="padding-left:18px;line-height:1.6">
-        <li>open <b id="mogrtAE">After Effects</b> and start a <b>new project</b>,</li>
+        <li>open <b id="mogrtAE">After Effects</b> <a href="#" id="mogrtChange" class="sub" title="Pick which After Effects to use">(change…)</a> and start a <b>new project</b>,</li>
         <li>rebuild this lower third there as an editable comp,</li>
         <li>ask where to save it, then save the <b>.aep</b> and export the <b>.mogrt</b> next to it.</li>
       </ol>
