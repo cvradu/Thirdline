@@ -249,3 +249,7 @@ details.more > .more-body { padding: 0 16px 20px; }
 .drop-hint[hidden] { display: none; }
 #inspector .section > h3 { justify-content: flex-start; }
 details.more > summary .sub { margin-left: auto; margin-right: 8px; }
+
+.tcol { flex: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.tcol #scrub { width: 100%; }
+.ph-head { width: 3px; box-shadow: 0 0 0 1px #0006; }

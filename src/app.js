@@ -1456,7 +1456,9 @@
     const r = phaseBar.getBoundingClientRect(), x = e.clientX - r.left, D = state.comp.duration;
     const m = marks(), xIn = (m.on / D) * r.width, xOut = (m.off / D) * r.width;
     phaseBar.setPointerCapture(e.pointerId);
-    const mode = Math.abs(x - xIn) < 10 ? 'in' : Math.abs(x - xOut) < 10 ? 'out' : x > xIn && x < xOut ? 'hold' : 'scrub';
+    const xHead = (time / D) * r.width;
+    // Grabbing the playhead (or clicking outside In / Out / the hold) scrubs.
+    const mode = Math.abs(x - xHead) < 7 ? 'scrub' : Math.abs(x - xIn) < 10 ? 'in' : Math.abs(x - xOut) < 10 ? 'out' : x > xIn && x < xOut ? 'hold' : 'scrub';
     phDrag = { mode, x0: x, w: r.width, m, D, hold: m.off - m.on, moved: false, snap: clone(state) };
     if (mode === 'scrub') { setPlaying(false); setTime((x / r.width) * D); }
   });
@@ -1465,13 +1467,13 @@
     if (!phDrag) {
       const D = state.comp.duration, m = marks();
       const xIn = (m.on / D) * r.width, xOut = (m.off / D) * r.width;
-      phaseBar.style.cursor = Math.abs(x - xIn) < 10 || Math.abs(x - xOut) < 10 ? 'ew-resize' : x > xIn && x < xOut ? 'grab' : 'pointer';
+      phaseBar.style.cursor = Math.abs(x - (time / D) * r.width) < 7 ? 'col-resize' : Math.abs(x - xIn) < 10 || Math.abs(x - xOut) < 10 ? 'ew-resize' : x > xIn && x < xOut ? 'grab' : 'pointer';
       return;
     }
     const d = phDrag; const dt = ((x - d.x0) / d.w) * d.D;
     if (Math.abs(x - d.x0) > 3) d.moved = true;
     if (!d.moved) return;
-    if (d.mode === 'scrub') return setTime((x / d.w) * d.D);
+    if (d.mode === 'scrub') return setTime(Math.max(0, Math.min(d.D, (x / d.w) * d.D)));
     // Restore the snapshot timing, then apply the new length.
     for (const k of allLayerIds()) { const src = Engine.getLayer(d.snap, k); if (src) lay(k).anim = clone(src.anim); }
     state.comp.duration = d.snap.comp.duration;

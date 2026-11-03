@@ -105,15 +105,17 @@
           <button id="btnNextFrame" title="Next frame (→)">|▶︎</button>
           <button id="btnHold" title="Jump to the fully-on frame">Hold</button>
         </span>
+        <div class="tcol">
+        <input type="range" id="scrub" min="0" max="1" step="0.0001" value="0" title="Drag to scrub through the animation" />
         <div class="easy-only phasebar" id="phaseBar" title="Drag the edges of In and Out to make the animation faster or slower">
           <div class="ph-in"><span>In</span></div><div class="ph-hold"><span></span></div><div class="ph-out"><span>Out</span></div>
           <i class="ph-head"></i>
         </div>
-        <input type="range" id="scrub" class="adv-only" min="0" max="1" step="0.0001" value="0" />
+        </div>
         <span class="timecode" id="timecode">00:00:00</span>
         <label class="chk"><input type="checkbox" id="optLoop" checked /> Loop</label>
       </div>
-      <div class="easy-only sub phase-tip">Drag the edges of “In” and “Out” to make the animation faster or slower, or the middle to change how long it stays on screen.</div>
+      <div class="easy-only sub phase-tip">Drag the slider (or the white playhead) to scrub. Drag the edges of “In” and “Out” to make the animation faster or slower, or the middle to change how long it stays on screen.</div>
       <div class="keybar adv-only" id="keyBar" hidden>
         <b id="kbLabel"></b>
         <span id="kbKeyCtl" class="kbgroup">
