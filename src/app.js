@@ -296,13 +296,21 @@
   // Align / distribute: by screen bounds. One layer aligns to the backdrop box (the backdrop to
   // the frame); several align to each other. "Frame" forces the video frame.
   let alignTo = 'auto';
-  function alignLayers(how) {
-    const ids = (multiSel.length > 1 ? multiSel : [selected]).filter((k) => k && lastLayout.layers[k]);
+  // Which layers the quick-align bar acts on: the multi-selection, else (Easy, or nothing
+  // selected) every visible layer apart from the backdrop, aligned to each other.
+  function quickAlignIds() {
+    if (multiSel.length > 1) return multiSel;
+    if (advanced && selected) return [selected];
+    return Object.keys(lastLayout.layers || {}).filter((k) => k !== 'backdrop' && !lastLayout.layers[k].group && !Engine.parentChain(state, k).length);
+  }
+  function alignLayers(how, only, refTo) {
+    const ids = (only || (multiSel.length > 1 ? multiSel : [selected])).filter((k) => k && lastLayout.layers[k]);
     if (!ids.length) return;
     const R = Object.fromEntries(ids.map((k) => [k, Engine.screenRect(lastLayout.layers[k])]));
     const W = state.comp.width, H = state.comp.height;
     let ref;
     if (alignTo === 'frame') ref = { x: 0, y: 0, w: W, h: H };
+    else if (refTo === 'backdrop' && lastLayout.layers.backdrop) ref = Engine.screenRect(lastLayout.layers.backdrop);
     else if (ids.length > 1) { const xs = ids.map((k) => R[k]); const x = Math.min(...xs.map((r) => r.x)), y = Math.min(...xs.map((r) => r.y)); ref = { x, y, w: Math.max(...xs.map((r) => r.x + r.w)) - x, h: Math.max(...xs.map((r) => r.y + r.h)) - y }; }
     else ref = ids[0] === 'backdrop' ? { x: 0, y: 0, w: W, h: H } : Engine.screenRect(lastLayout.layers.backdrop) || { x: 0, y: 0, w: W, h: H };
     const move = {};
@@ -330,6 +338,33 @@
     }
     changed({ sync: true });
   }
+  // Fine adjust: hold Shift, Ctrl or Cmd while dragging any slider to move it at a tenth of the speed.
+  {
+    let fine = null;
+    document.addEventListener('pointerdown', (e) => {
+      const i = e.target;
+      if (!(i instanceof HTMLInputElement) || i.type !== 'range' || e.button !== 0 || !(e.shiftKey || e.ctrlKey || e.metaKey)) return;
+      e.preventDefault(); e.stopPropagation();
+      const min = +i.min || 0, max = i.max === '' ? 100 : +i.max, step = +i.step || 1;
+      fine = { i, x: e.clientX, v0: +i.value, min, max, step, per: (max - min) / Math.max(40, i.getBoundingClientRect().width) / 10 };
+      i.step = 'any'; i.focus();
+      try { i.setPointerCapture(e.pointerId); } catch {}
+    }, true);
+    document.addEventListener('pointermove', (e) => {
+      if (!fine) return;
+      const f = fine, q = f.step / 10;
+      const v = Math.max(f.min, Math.min(f.max, Math.round((f.v0 + (e.clientX - f.x) * f.per) / q) * q));
+      if (+f.i.value !== v) { f.i.value = String(+v.toFixed(6)); f.i.dispatchEvent(new Event('input', { bubbles: true })); }
+    }, true);
+    const end = () => { if (!fine) return; const f = fine; fine = null; f.i.dispatchEvent(new Event('change', { bubbles: true })); f.i.step = String(f.step); };
+    document.addEventListener('pointerup', end, true); document.addEventListener('pointercancel', end, true);
+    document.addEventListener('contextmenu', (e) => { if (e.target instanceof HTMLInputElement && e.target.type === 'range') e.preventDefault(); }, true);
+  }
+  document.querySelectorAll('#quickAlign [data-align]').forEach((b) => b.addEventListener('click', () => {
+    const how = b.dataset.align, ids = quickAlignIds();
+    // The whole design (Easy, nothing selected) centres inside the backdrop; edges line up with each other.
+    alignLayers(how, ids, multiSel.length < 2 && ids.length > 1 && (how === 'centerH' || how === 'middle') ? 'backdrop' : null);
+  }));
   function alignRow() {
     const b = (how, label, title) => el('button', { type: 'button', title, onclick: () => alignLayers(how) }, label);
     const to = el('select', { title: 'What to align to' });
@@ -1930,14 +1965,77 @@
     preview.width = state.comp.width; preview.height = state.comp.height;
     fitFrame(); drawPreview();
   }
-  function fitFrame() {
+  // Preview zoom: 'fit' or a scale (1 = 100%: one video pixel per screen pixel), plus a pan offset.
+  const pview = { z: 'fit', px: 0, py: 0 };
+  function fitScale() {
     const vw = viewport.clientWidth - 32, vh = viewport.clientHeight - 32;
-    const ar = state.comp.width / state.comp.height;
-    let w = vw, h = vw / ar;
-    if (h > vh) { h = vh; w = vh * ar; }
-    frame.style.width = `${Math.max(50, w)}px`; frame.style.height = `${Math.max(50, h)}px`;
+    return Math.max(0.01, Math.min(vw / state.comp.width, vh / state.comp.height));
+  }
+  const viewScale = () => (pview.z === 'fit' ? fitScale() : pview.z);
+  function fitFrame() {
+    const sc = viewScale();
+    const w = state.comp.width * sc, h = state.comp.height * sc;
+    if (pview.z === 'fit') { pview.px = 0; pview.py = 0; }
+    else {
+      // Don't let the frame wander completely out of view.
+      const mx = Math.max(0, (w - viewport.clientWidth) / 2 + 60), my = Math.max(0, (h - viewport.clientHeight) / 2 + 60);
+      pview.px = Math.max(-mx, Math.min(mx, pview.px)); pview.py = Math.max(-my, Math.min(my, pview.py));
+    }
+    frame.style.width = `${Math.max(20, w)}px`; frame.style.height = `${Math.max(20, h)}px`;
+    frame.style.transform = pview.px || pview.py ? `translate(${pview.px}px, ${pview.py}px)` : '';
+    frame.style.flex = 'none';
+    const zs = $('#zoomSel');
+    if (zs) {
+      const pct = `${Math.round(sc * 100)}%`;
+      const opt = zs.querySelector('option[data-custom]') || zs.appendChild(Object.assign(document.createElement('option'), { value: 'custom' }));
+      opt.dataset.custom = '1'; opt.textContent = pview.z === 'fit' ? `Fit (${pct})` : pct; opt.hidden = true;
+      zs.value = 'custom';
+    }
   }
   new ResizeObserver(fitFrame).observe(viewport);
+  function zoomPreview(z, at) {
+    const old = viewScale();
+    z = z === 'fit' ? 'fit' : Math.max(0.1, Math.min(8, z));
+    const nz = z === 'fit' ? fitScale() : z;
+    if (z !== 'fit' && at) {
+      // Keep the point under the mouse where it is.
+      const r = frame.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+      const k = nz / old;
+      pview.px += (at[0] - cx) * (1 - k); pview.py += (at[1] - cy) * (1 - k);
+    }
+    pview.z = z;
+    fitFrame(); drawPreview();
+  }
+  $('#zoomSel').addEventListener('change', (e) => { const v = e.target.value; if (v === 'custom') return; if (v !== 'fit') { pview.px = 0; pview.py = 0; } zoomPreview(v === 'fit' ? 'fit' : +v); });
+  viewport.addEventListener('wheel', (e) => {
+    if (e.altKey || e.ctrlKey) {
+      e.preventDefault();
+      zoomPreview(viewScale() * Math.exp(-(e.deltaY || e.deltaX) * (e.ctrlKey ? 0.01 : 0.002)), [e.clientX, e.clientY]);
+    } else if (pview.z !== 'fit') {
+      e.preventDefault();
+      pview.px -= e.shiftKey ? e.deltaY : e.deltaX; pview.py -= e.shiftKey ? 0 : e.deltaY;
+      fitFrame();
+    }
+  }, { passive: false });
+  // Pan: hold Space and drag, or drag with the middle mouse button.
+  let spaceHeld = false, spacePanned = false, panDrag = null;
+  viewport.addEventListener('pointerdown', (e) => {
+    if (!(spaceHeld || e.button === 1)) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    if (pview.z === 'fit') { pview.z = fitScale(); }
+    panDrag = { x: e.clientX, y: e.clientY, px: pview.px, py: pview.py };
+    spacePanned = true;
+    viewport.setPointerCapture(e.pointerId);
+    viewport.classList.add('panning');
+  }, true);
+  viewport.addEventListener('pointermove', (e) => {
+    if (!panDrag) return;
+    e.stopImmediatePropagation();
+    pview.px = panDrag.px + e.clientX - panDrag.x; pview.py = panDrag.py + e.clientY - panDrag.y;
+    fitFrame();
+  }, true);
+  viewport.addEventListener('pointerup', (e) => { if (panDrag) { panDrag = null; e.stopImmediatePropagation(); viewport.classList.remove('panning'); } }, true);
+  viewport.addEventListener('dblclick', (e) => { if (e.target === viewport) zoomPreview('fit'); });
 
   // ---------- Panel layout: drag edges to resize, drag a panel's grip to move it ----------
   const saveLayout = () => { try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(panelLayout)); } catch {} };
@@ -2429,7 +2527,7 @@
     g.fillStyle = '#fff'; g.beginPath(); g.moveTo(px - 5, 0); g.lineTo(px + 5, 0); g.lineTo(px, 7); g.fill();
     g.fillStyle = '#596176'; g.font = '10px -apple-system, sans-serif';
     if (tlView.z <= 1.0001) g.fillText(advanced
-      ? 'Click ◆ or a ramp to edit · Shift+click or drag a box to select several ◆ · drag ◆ to retime · ▾ folds a layer’s keys'
+      ? 'Click the time numbers to move the playhead · click ◆ or a ramp to edit · drag a box or Shift+click to select several ◆ · drag ◆ to retime'
       : 'Ramp: transition length · outer edge: in/out point · middle: move layer', TL.left, h - 6);
   }
   tl.addEventListener('pointerdown', (e) => {
@@ -2457,13 +2555,17 @@
         pickKey(row.path, best, add); selPreset = null; setPlaying(false);
         if (add && !isSelKey(best)) { updateKeyBar(); drawTimeline(); release(); return; }
         // Dragging moves every selected keyframe together.
-        tlDrag = { keyDrag: true, path: row.path, k: best, t0: best.t, moved: false, group: selKeys.map((s) => ({ ...s, t0: s.k.t })) };
+        // Measured from where the mouse went down (not the key's centre), and only after a small
+        // move, so a plain click never nudges the key.
+        tlDrag = { keyDrag: true, path: row.path, k: best, t0: best.t, m0: st(mx), x0: mx, moved: false, add, group: selKeys.map((s) => ({ ...s, t0: s.k.t })) };
         setTime(best.t); updateKeyBar(); drawTimeline();
         return;
       }
     }
+    // The ruler (time numbers along the top) moves the playhead.
+    if (my < TL.ruler) { if (selPreset) { selPreset = null; updateKeyBar(); } tlDrag = { scrub: true }; setPlaying(false); setTime(st(mx)); return; }
     // Advanced: drag on an empty spot of the keyframe area to box-select keyframes.
-    if (advanced && mx >= TL.left && (!row || row.type === 'key' || row.type === 'group')) {
+    if (advanced && mx >= TL.left && (!row || row.type === 'key' || row.type === 'group' || (row.type === 'bar' && !barAt(row, mx)))) {
       const add = e.shiftKey || e.metaKey || e.ctrlKey;
       tlDrag = { box: true, x0: mx, y0: my, x1: mx, y1: my, base: add ? selKeys.slice() : [] };
       if (!add) (selKey = null, selKeys = []);
@@ -2527,8 +2629,10 @@
     if (tlDrag.keyDrag) {
       const g = tlDrag.group, D = state.comp.duration;
       // Keep the whole group inside the timeline.
+      if (!tlDrag.moved && Math.abs(e.clientX - r.left - tlDrag.x0) < 3) return;
+      tlDrag.moved = true;
       const lo = Math.min(...g.map((s) => s.t0)), hi = Math.max(...g.map((s) => s.t0));
-      const dt = Math.max(-lo, Math.min(D - hi, fpsT(t) - tlDrag.t0));
+      const dt = Math.max(-lo, Math.min(D - hi, fpsT(tlDrag.t0 + t - tlDrag.m0) - tlDrag.t0));
       for (const s of g) { s.k.t = fpsT(s.t0 + dt); }
       for (const path of new Set(g.map((s) => s.path))) sortKeys(path);
       changed({ sync: true });
@@ -2547,15 +2651,17 @@
   tl.addEventListener('pointerup', (e) => {
     const d = tlDrag; tlDrag = null;
     if (d && d.endDrag) { tlSpan = 0; drawTimeline(); }
-    if (d && d.box) {
-      // A click (no drag) on empty keyframe space still moves the playhead.
-      if (Math.abs(d.x1 - d.x0) < 3 && Math.abs(d.y1 - d.y0) < 3) setTime(tlGeom().st(d.x0));
-      drawTimeline();
-    }
+    if (d && d.box) drawTimeline(); // a plain click on empty space just clears the selection
+    // A plain click on a key that was part of a bigger selection selects just that key.
+    if (d && d.keyDrag && !d.moved && !d.add && selKeys.length > 1) { selKeys = [{ path: d.path, k: d.k }]; selKey = selKeys[0]; updateKeyBar(); drawTimeline(); }
   });
   // Which part of a layer bar is under the mouse:
   //  outer end of a ramp → move the in/out point; the ramp (graph) itself → change that transition's duration;
   //  the hold section → move the whole layer.
+  function barAt(row, mx) {
+    const { sx } = tlGeom(), a = lay(row.key).anim, sp = Engine.timingSpans(a, state.comp.duration);
+    return barHit(mx, sx(sp.inStart), sx(sp.inEnd), sx(sp.outStart), sx(sp.outEnd), a);
+  }
   function barHit(mx, x0, x1, x2, x3, a) {
     const E = 6;
     const hasIn = a.in.type !== 'none', hasOut = a.out.type !== 'none';
@@ -3508,7 +3614,8 @@
     }
     if (e.key === 'Escape' && !ctxMenu.hidden) { closeMenu(); return; }
     if (typing || dlg.open || gDlg.open || bDlg.open || lDlg.open) return;
-    if (e.code === 'Space') { e.preventDefault(); setPlaying(!playing); }
+    // Space: tap to play / pause, hold and drag to move around a zoomed preview.
+    if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) { spaceHeld = true; spacePanned = false; viewport.classList.add('can-pan'); } }
     else if (e.key === 'ArrowLeft') $('#btnPrevFrame').click();
     else if (e.key === 'ArrowRight') $('#btnNextFrame').click();
     else if (e.key === 'Home') $('#btnStart').click();
@@ -3519,6 +3626,11 @@
     else if (e.key.toLowerCase() === 'k') jumpKey(1);
     else if (e.key === 'Tab' && document.activeElement === document.body) { e.preventDefault(); const order = tracks().map((t) => t[0]); selectLayer(order[(order.indexOf(selected) + (e.shiftKey ? order.length - 1 : 1)) % order.length]); }
     else if ((e.key === 'Delete' || e.key === 'Backspace') && advanced && isExtra(selected)) { e.preventDefault(); deleteLayer(selected); }
+  });
+  document.addEventListener('keyup', (e) => {
+    if (e.code !== 'Space' || !spaceHeld) return;
+    spaceHeld = false; viewport.classList.remove('can-pan');
+    if (!spacePanned) setPlaying(!playing);
   });
   $('#btnUndo').onclick = undo;
   $('#btnRedo').onclick = redo;
@@ -3635,7 +3747,8 @@
     window.__l3rd = { get state() { return state; }, setTime, replaceState, render: drawPreview, selectLayer, addLayer, loadCSV, openBatch, openMogrt,
       selKeyCount: () => selKeys.length, multiSel: () => multiSel.slice(), motionPath: () => motionPath(), variantState: (st, w, h) => variantState(st, w, h),
       selectAllKeysOf: (path) => { selKeys = (state.keys[path] || []).map((k) => ({ path, k })); selKey = selKeys[selKeys.length - 1] || null; updateKeyBar(); drawTimeline(); }, selKeyTimes: () => selKeys.map((s) => s.k.t),
-      tlDebug: () => { const g = tlGeom(); return { rows: timelineRows(), left: TL.left, right: TL.right, w: g.w, span: g.span, t0: g.t0, z: tlView.z }; } };
+      tlDebug: () => { const g = tlGeom(); return { rows: timelineRows(), left: TL.left, right: TL.right, ruler: TL.ruler, w: g.w, span: g.span, t0: g.t0, z: tlView.z }; },
+      time: () => time, viewScale: () => viewScale(), pview: () => ({ ...pview }), rects: () => Object.fromEntries(Object.entries(lastLayout.layers).map(([k, b]) => [k, Engine.screenRect(b)])), playing: () => playing };
     setTimeout(() => checkUpdates(false).catch(() => {}), 3000);
   }
   boot();

@@ -93,6 +93,14 @@
         <label class="chk"><input type="checkbox" id="optSafe" checked /> Safe areas</label>
         <label class="chk adv-only"><input type="checkbox" id="optBounds" /> Bounds</label>
         <label class="chk adv-only" title="Motion blur (applied when exporting)"><input type="checkbox" id="optMB" /> Motion blur</label>
+        <select id="zoomSel" title="Preview zoom · Option/Alt+scroll or pinch to zoom, scroll or Space+drag to move around">
+          <option value="fit">Fit</option><option value="0.25">25%</option><option value="0.5">50%</option><option value="1">100%</option><option value="2">200%</option><option value="4">400%</option>
+        </select>
+        <span class="quick-align" id="quickAlign" title="Line up the selected layers (in Easy, or with nothing selected: the title, subtitle and extras)">
+          <span class="lbl">Align</span>
+          <button type="button" data-align="left" title="Align left">⇤</button><button type="button" data-align="centerH" title="Centre">↔</button><button type="button" data-align="right" title="Align right">⇥</button>
+          <button type="button" data-align="middle" class="adv-only" title="Centre vertically">↕</button>
+        </span>
         <span class="spacer"></span>
         <button id="btnLive" class="live-btn" title="Send this lower third to OBS as a browser source">● Go live</button>
       </div>

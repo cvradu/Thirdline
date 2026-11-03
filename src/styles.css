@@ -320,3 +320,13 @@ details.parts > summary::before { content: '▸ '; } details.parts[open] > summa
 .var-thumbs img { display: block; border: 1px solid var(--line); border-radius: 4px; background: repeating-conic-gradient(#3a3f4b 0 25%, #2b2f38 0 50%) 0 0/12px 12px; }
 
 .layer-row .fold { width: 12px; color: var(--muted); font-size: 10px; flex: none; }
+
+.viewport.can-pan, .viewport.can-pan canvas { cursor: grab !important; }
+.viewport.panning, .viewport.panning canvas { cursor: grabbing !important; }
+#zoomSel { min-width: 92px; }
+.quick-align { display: inline-flex; align-items: center; gap: 2px; }
+.quick-align .lbl { margin-right: 4px; }
+.quick-align button { min-width: 26px; height: 24px; padding: 0 5px; font-size: 13px; line-height: 1; }
+.stage-toolbar { gap: 10px; flex-wrap: nowrap; min-width: 0; }
+.stage-toolbar .lbl, .stage-toolbar .chk, .stage-toolbar .live-btn { white-space: nowrap; }
+.stage-toolbar #bgMode { max-width: 150px; }
