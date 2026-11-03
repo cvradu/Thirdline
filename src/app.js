@@ -4098,7 +4098,10 @@
   dlg.addEventListener('cancel', (e) => { if (exportJob) { e.preventDefault(); exportCancelled = true; } });
   $('#btnReveal').onclick = () => lastOut && api.reveal(lastOut);
   $('#btnExportGo').onclick = () => runExport().catch((err) => {
-    $('#exportError').hidden = false; $('#exportError').textContent = String(err.message || err);
+    // Where it happened (file:line), so a screenshot of the message is enough to track it down.
+    const at = err && err.stack ? (/(\w+\.js):(\d+)/.exec(err.stack.split('\n').slice(1).join('\n')) || [])[0] : '';
+    console.error(err);
+    $('#exportError').hidden = false; $('#exportError').textContent = String(err.message || err) + (at ? ` (${at})` : '');
   });
 
   // Renders every frame of a design and streams it to ffmpeg. Used by Export and Batch export.

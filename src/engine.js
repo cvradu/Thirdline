@@ -66,8 +66,10 @@
 
   // ---------- Timing ----------
   // Returns { visible, phase, raw, p } where p is eased visibility (1 = fully on).
+  const NO_ANIM_DIR = { type: 'none', duration: 0.5, delay: 0, offset: 0, easing: 'linear' };
   function phaseAt(anim, t, duration) {
-    const inA = anim.in, outA = anim.out;
+    // A layer without an animation (or with half of one) just holds.
+    const inA = (anim && anim.in) || NO_ANIM_DIR, outA = (anim && anim.out) || NO_ANIM_DIR;
     const inStart = inA.delay || 0;
     const inDur = inA.type === 'none' ? 0 : Math.max(0.001, inA.duration);
     const outEnd = duration - (outA.offset || 0);
@@ -91,6 +93,7 @@
   }
 
   function timingSpans(anim, duration) {
+    anim = { in: (anim && anim.in) || NO_ANIM_DIR, out: (anim && anim.out) || NO_ANIM_DIR };
     const inStart = anim.in.delay || 0;
     const inEnd = anim.in.type === 'none' ? inStart : inStart + anim.in.duration;
     const outEnd = duration - (anim.out.offset || 0);
