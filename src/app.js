@@ -1963,6 +1963,7 @@
     const mb = state.comp.motionBlur;
     const mbOpts = mb && mb.enabled && mb.preview && !dragging ? { samples: Math.min(mb.samples, playing ? 4 : 8) } : { noMotionBlur: true };
     lastLayout = Engine.renderFrame(pctx, state, time, { guides: true, safeAreas: view.safeAreas, bounds: view.bounds || dragging, selected, also: advanced && multiSel.length > 1 ? multiSel : null, anchor: advanced, ...mbOpts });
+    if (advanced && selected) drawMotionPath();
     const fps = state.comp.fps;
     const f = Math.round(time * fps);
     $('#timecode').textContent = `${time.toFixed(2)}s · f${f} / ${Math.round(state.comp.duration * fps)}`;
@@ -1970,6 +1971,78 @@
     drawPhaseBar();
   }
   Engine.onImageLoad = () => { drawPreview(); syncControls(); };
+
+  // ---------- Motion path (After Effects style) ----------
+  // The path the selected layer's anchor point travels: a dot per frame, a square per position
+  // keyframe. Drag a square to move that keyframe's position.
+  let mpCache = null, mpDrag = null;
+  const mctx = document.createElement('canvas').getContext('2d');
+  function motionPath() {
+    if (!selected || !lay(selected)) return null;
+    const px = `${pp(selected)}.transform.x`, py = `${pp(selected)}.transform.y`;
+    const kx = keysOf(px) || [], ky = keysOf(py) || [];
+    if (kx.length < 2 && ky.length < 2) return null;
+    const sig = JSON.stringify([selected, state.keys, state.layout, state.comp.fps, state.comp.duration, lay(selected).parent, lay(selected).transform]);
+    if (mpCache && mpCache.sig === sig) return mpCache;
+    const times = [...new Set([...kx, ...ky].map((k) => k.t))].sort((a, b) => a - b);
+    const t0 = times[0], t1 = times[times.length - 1], fps = state.comp.fps;
+    const at = (t) => { const rs = Engine.resolveAt(state, t); const L = Engine.layoutAt(mctx, rs); return L.layers[selected] ? Engine.anchorScreen(rs, selected, L.layers[selected]) : null; };
+    const n = Math.min(240, Math.max(2, Math.round((t1 - t0) * fps)));
+    const pts = [];
+    for (let i = 0; i <= n; i++) { const p = at(t0 + ((t1 - t0) * i) / n); if (p) pts.push(p); }
+    const keys = times.map((t) => ({ t, p: at(t), kx: kx.find((k) => Math.abs(k.t - t) < 1e-6), ky: ky.find((k) => Math.abs(k.t - t) < 1e-6) })).filter((k) => k.p);
+    mpCache = { sig, pts, keys, px, py };
+    return mpCache;
+  }
+  function drawMotionPath() {
+    const mp = motionPath();
+    if (!mp) return;
+    const g = pctx, lw = Math.max(1, state.comp.width / 960);
+    g.save();
+    g.strokeStyle = 'rgba(245,158,11,0.55)'; g.lineWidth = 1.2 * lw; g.setLineDash([5 * lw, 4 * lw]);
+    g.beginPath(); mp.pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y))); g.stroke();
+    g.setLineDash([]); g.fillStyle = 'rgba(245,158,11,0.8)';
+    for (const [x, y] of mp.pts) { g.beginPath(); g.arc(x, y, 1.6 * lw, 0, Math.PI * 2); g.fill(); }
+    for (const k of mp.keys) {
+      const on = (k.kx && isSelKey(k.kx)) || (k.ky && isSelKey(k.ky)) || (mpDrag && mpDrag.t === k.t);
+      const r = (on ? 6 : 4.5) * lw;
+      g.fillStyle = on ? '#f59e0b' : '#ffffff'; g.strokeStyle = '#000000aa'; g.lineWidth = 1.5 * lw;
+      g.fillRect(k.p[0] - r, k.p[1] - r, r * 2, r * 2); g.strokeRect(k.p[0] - r, k.p[1] - r, r * 2, r * 2);
+    }
+    g.restore();
+  }
+  function motionKeyAt(e) {
+    if (!advanced || !mpCache || !selected) return null;
+    const [cx, cy] = toComp(e);
+    const tol = 9 * (state.comp.width / preview.getBoundingClientRect().width);
+    return mpCache.keys.find((k) => Math.hypot(k.p[0] - cx, k.p[1] - cy) <= tol) || null;
+  }
+  preview.addEventListener('pointerdown', (e) => {
+    const k = motionKeyAt(e);
+    if (!k) return;
+    e.stopImmediatePropagation();
+    preview.setPointerCapture(e.pointerId);
+    const frames = (lastLayout.layers[selected] || {}).parents || [];
+    mpDrag = { t: k.t, kx: k.kx, ky: k.ky, x0: k.kx ? k.kx.v : null, y0: k.ky ? k.ky.v : null, m: toComp(e), frames, moved: false };
+    selKeys = [k.kx && { path: mpCache.px, k: k.kx }, k.ky && { path: mpCache.py, k: k.ky }].filter(Boolean); selKey = selKeys[0]; selPreset = null;
+    setPlaying(false); setTime(k.t);
+    mpDrag.c = [e.clientX, e.clientY];
+  }, true);
+  preview.addEventListener('pointermove', (e) => {
+    if (!mpDrag) { if (!dragging && !anchorDrag && advanced) { const k = motionKeyAt(e); if (k) preview.style.cursor = 'move'; } return; }
+    e.stopImmediatePropagation();
+    // Measured from where the drag started on screen: the preview can shift while the key bar
+    // and timeline rows appear, so absolute positions would jump.
+    const rr = preview.getBoundingClientRect();
+    let mx = mpDrag.m[0] + ((e.clientX - mpDrag.c[0]) / rr.width) * state.comp.width, my = mpDrag.m[1] + ((e.clientY - mpDrag.c[1]) / rr.height) * state.comp.height;
+    if (e.shiftKey) { if (Math.abs(mx - mpDrag.m[0]) >= Math.abs(my - mpDrag.m[1])) my = mpDrag.m[1]; else mx = mpDrag.m[0]; }
+    const [qx, qy] = Engine.toParentSpace(mpDrag.frames, mx, my), [q0x, q0y] = Engine.toParentSpace(mpDrag.frames, ...mpDrag.m);
+    if (mpDrag.kx) mpDrag.kx.v = Math.round(mpDrag.x0 + qx - q0x);
+    if (mpDrag.ky) mpDrag.ky.v = Math.round(mpDrag.y0 + qy - q0y);
+    mpDrag.moved = true;
+    changed({ sync: true });
+  }, true);
+  preview.addEventListener('pointerup', (e) => { if (mpDrag) { mpDrag = null; e.stopImmediatePropagation(); dragging = false; drawPreview(); updateKeyBar(); drawTimeline(); } }, true);
 
   function setTime(t) {
     time = Math.max(0, Math.min(state.comp.duration, t));
@@ -2005,7 +2078,7 @@
     if (hit !== selected && !(hit && multiSel.includes(hit))) selectLayer(hit);
     else if (hit && hit !== selected) selectLayer(hit, { keepMulti: true });
     dragging = true; preview.setPointerCapture(e.pointerId);
-    dragStart = { m: [cx, cy], x: state.layout.x, y: state.layout.y };
+    dragStart = { m: [cx, cy], c: [e.clientX, e.clientY], x: state.layout.x, y: state.layout.y };
     const grab = (k) => ({ key: k, x: valueNow(`${pp(k)}.transform.x`), y: valueNow(`${pp(k)}.transform.y`), frames: (lastLayout.layers[k] || {}).parents || [] });
     if (advanced && hit && hit === selected) {
       dragStart.layer = grab(hit);
@@ -2055,7 +2128,9 @@
   });
   preview.addEventListener('pointermove', (e) => {
     if (!dragging) return;
-    let [mx, my] = toComp(e);
+    // Relative to where the drag started on screen (the preview can shift while timeline rows appear).
+    const rr = preview.getBoundingClientRect();
+    let mx = dragStart.m[0] + ((e.clientX - dragStart.c[0]) / rr.width) * state.comp.width, my = dragStart.m[1] + ((e.clientY - dragStart.c[1]) / rr.height) * state.comp.height;
     // Shift locks the move to whichever axis you're moving along most.
     if (e.shiftKey) {
       if (Math.abs(mx - dragStart.m[0]) >= Math.abs(my - dragStart.m[1])) my = dragStart.m[1]; else mx = dragStart.m[0];
@@ -3416,7 +3491,7 @@
     drawTimeline();
     refreshGallery();
     window.__l3rd = { get state() { return state; }, setTime, replaceState, render: drawPreview, selectLayer, addLayer, loadCSV, openBatch, openMogrt,
-      selKeyCount: () => selKeys.length, multiSel: () => multiSel.slice(),
+      selKeyCount: () => selKeys.length, multiSel: () => multiSel.slice(), motionPath: () => motionPath(),
       selectAllKeysOf: (path) => { selKeys = (state.keys[path] || []).map((k) => ({ path, k })); selKey = selKeys[selKeys.length - 1] || null; updateKeyBar(); drawTimeline(); }, selKeyTimes: () => selKeys.map((s) => s.k.t),
       tlDebug: () => { const g = tlGeom(); return { rows: timelineRows(), left: TL.left, right: TL.right, w: g.w, span: g.span, t0: g.t0, z: tlView.z }; } };
     setTimeout(() => checkUpdates(false).catch(() => {}), 3000);
