@@ -326,10 +326,30 @@
   }
   function parentFrames(state, L, id) {
     const out = [];
-    for (const p of parentChain(state, id)) { const b = drawBox(state, L, p); if (b) out.push({ tr: { ...NO_TR, ...(getLayer(state, p).transform || {}) }, b }); }
+    for (const p of parentChain(state, id)) { const b = drawBox(state, L, p); if (b) out.push({ id: p, tr: { ...NO_TR, ...(getLayer(state, p).transform || {}) }, b }); }
     return out;
   }
-  function applyParents(ctx, state, L, id) { for (const f of parentFrames(state, L, id)) applyLayerTransform(ctx, f.tr, f.b, false); }
+  // anim: also apply each parent *group's* in/out animation, so a group animates its children.
+  function applyParents(ctx, state, L, id, anim = false) {
+    for (const f of parentFrames(state, L, id)) {
+      const g = getLayer(state, f.id), isGroup = !!g && g.kind === 'group';
+      // Only a group passes its opacity down (After Effects parenting doesn't).
+      applyLayerTransform(ctx, f.tr, f.b, anim && isGroup);
+      if (anim && isGroup) {
+        const ph = phaseAt(g.anim, curT, state.comp.duration);
+        const r = animParams(effType(ph), ph.p, f.b, g.anim.distance, anchored(f.tr) ? pivotOf(f.tr, f.b) : null);
+        applyParams(ctx, r, 200, 0);
+      }
+    }
+  }
+  // A layer is hidden when a group it belongs to is hidden or not on screen yet / any more.
+  function hiddenByGroup(state, id, t) {
+    for (const p of parentChain(state, id)) {
+      const g = getLayer(state, p);
+      if (g && g.kind === 'group' && (g.visible === false || !phaseAt(g.anim, t, state.comp.duration).visible)) return true;
+    }
+    return false;
+  }
   // Point through one transform (forward) and back (inverse).
   function fwdPt(tr, b, x, y) {
     const [cx, cy] = pivotOf(tr, b);
@@ -911,7 +931,7 @@
 
   // ---------- Extra layers (logo, shapes, more text) ----------
   // state.layers = { id: layer }, state.order = bottom→top list of ids (backdrop/title/subtitle included).
-  const EXTRA_KINDS = { text: 'Text', image: 'Logo / image', shape: 'Shape' };
+  const EXTRA_KINDS = { text: 'Text', image: 'Logo / image', shape: 'Shape', group: 'Group' };
   const EXTRA_SHAPES = { rect: 'Rectangle', rounded: 'Rounded rectangle', ellipse: 'Circle / ellipse', line: 'Line' };
   function getLayer(state, id) { return id === 'backdrop' || id === 'title' || id === 'subtitle' ? state[id] : state.layers && state.layers[id]; }
   function layerOrder(state) {
@@ -946,6 +966,7 @@
     const out = {};
     const { width: W, height: H } = state.comp;
     for (const [id, ly] of Object.entries(state.layers || {})) {
+      if (ly.kind === 'group') continue;
       let w = ly.w || 0, h = ly.h || 0, line = null;
       const ref = ly.attach === 'frame' ? { x: 0, y: 0, w: W, h: H } : L.box;
       if (ly.kind === 'text') {
@@ -968,6 +989,16 @@
       const b = { x, y, w, h };
       if (line) b.line = { ...line, x, top: y, baseline: y + line.ascent, bottom: y + h };
       out[id] = b;
+    }
+    // Groups: the box around everything in them (nested groups after their children).
+    const groups = Object.entries(state.layers || {}).filter(([, l]) => l.kind === 'group').map(([id]) => id);
+    const Lx = { ...L, extras: out };
+    for (let pass = 0; pass < 4; pass++) for (const gid of groups) {
+      const kids = layerOrder(state).filter((k) => (getLayer(state, k) || {}).parent === gid);
+      const bs = kids.map((k) => drawBox(state, Lx, k)).filter(Boolean);
+      if (!bs.length) { out[gid] = { ...L.box }; continue; }
+      const x = Math.min(...bs.map((b) => b.x)), y = Math.min(...bs.map((b) => b.y));
+      out[gid] = { x, y, w: Math.max(...bs.map((b) => b.x + b.w)) - x, h: Math.max(...bs.map((b) => b.y + b.h)) - y };
     }
     return out;
   }
@@ -1008,7 +1039,7 @@
     if (!chain.length) return draw(null);
     ctx.save();
     const m0 = ctx.getTransform();
-    applyParents(ctx, state, L, id);
+    applyParents(ctx, state, L, id, true);
     const m = ctx.getTransform();
     ctx.setTransform(m0); applyParents(ctx, state, L, 'backdrop'); applyLayerTransform(ctx, state.backdrop.transform, L.box, false);
     const pm = ctx.getTransform(); ctx.setTransform(m);
@@ -1038,7 +1069,7 @@
     if (ds !== 1) { ctx.translate(state.layout.x, state.layout.y); ctx.scale(ds, ds); ctx.translate(-state.layout.x, -state.layout.y); }
     for (const id of layerOrder(state)) {
       if (id === 'backdrop') {
-        if (bd.type === 'none' || bd.visible === false) continue;
+        if (bd.type === 'none' || bd.visible === false || hiddenByGroup(state, id, t)) continue;
         const ph = phaseAt(bd.anim, t, duration);
         if (!ph.visible) continue;
         const type = effType(ph);
@@ -1047,7 +1078,7 @@
         const r = animParams(type, ph.p, bb, bd.anim.distance, anchored(bd.transform) ? pivotOf(bd.transform, bb) : null);
         withMask(ctx, state, 'backdrop', (c) => {
           c.save();
-          applyParents(c, state, L, 'backdrop');
+          applyParents(c, state, L, 'backdrop', true);
           const tr = bd.transform || NO_TR;
           applyLayerTransform(c, tr, bb);
           layerBlur = tr.blur || 0;
@@ -1058,12 +1089,13 @@
           c.restore();
         });
       } else if (id === 'title' || id === 'subtitle') {
+        if (hiddenByGroup(state, id, t)) continue;
         const ph = phaseAt(state[id].anim, t, duration);
         if (!ph.visible || L[id].empty || state[id].visible === false) continue;
         withMask(ctx, state, id, (c) => withParents(c, state, L, id, (pm) => drawText(c, pm ? { ...state[id], parentApplied: pm } : state[id], L[id], ph, L, state)));
       } else {
         const ly = state.layers && state.layers[id], eb = L.extras[id];
-        if (!ly || !eb || ly.visible === false) continue;
+        if (!ly || !eb || ly.visible === false || ly.kind === 'group' || hiddenByGroup(state, id, t)) continue;
         const ph = phaseAt(ly.anim, t, duration);
         if (!ph.visible) continue;
         withMask(ctx, state, ly, (c) => withParents(c, state, L, id, () => drawExtra(c, state, ly, eb, ph, L)));
@@ -1153,7 +1185,7 @@
     };
     const eb = L.extras || {};
     for (const [id, b] of Object.entries(eb)) if (state.layers[id] && state.layers[id].visible !== false) out[id] = { x: b.x, y: b.y, w: b.w, h: b.h };
-    for (const k of Object.keys(out)) if (out[k]) { out[k].tr = { ...NO_TR, ...((getLayer(state, k) || {}).transform || {}) }; out[k].parents = parentFrames(state, L, k); }
+    for (const k of Object.keys(out)) if (out[k]) { out[k].tr = { ...NO_TR, ...((getLayer(state, k) || {}).transform || {}) }; out[k].parents = parentFrames(state, L, k); if ((getLayer(state, k) || {}).kind === 'group') out[k].group = true; }
     return out;
   }
   // Point-in-layer test that undoes the layer's transform (position, rotation, scale).
@@ -1164,7 +1196,7 @@
     const pick = [...order.filter((k) => k !== 'backdrop'), 'backdrop'];
     for (const k of pick) {
       const b = L.layers[k];
-      if (!b) continue;
+      if (!b || b.group) continue;
       const [qx, qy] = toParentSpace(b.parents, x, y);
       const [px, py] = invPt(b.tr || NO_TR, b, qx, qy);
       if (px >= b.x && px <= b.x + b.w && py >= b.y && py <= b.y + b.h) return k;

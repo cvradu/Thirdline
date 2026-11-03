@@ -223,6 +223,13 @@ const { chromium } = require('playwright');
     };
     par.backdrop.anim.in.type = 'scale';
     res.push(compare(par, 'Anchor + parenting', [0.45, 0.6, 1.5, 2.5, D - 0.2]));
+    // A group holding the title and subtitle, moved and scaled.
+    const grp = Presets.builtin(0);
+    const gl = Presets.newLayer('shape', { name: 'Group 1' }); gl.kind = 'group'; gl.anim.in.type = 'none'; gl.anim.out.type = 'none';
+    gl.transform.x = 60; gl.transform.y = -30; gl.transform.scale = 110;
+    grp.layers = { g1: gl }; grp.order = ['backdrop', 'title', 'subtitle', 'g1'];
+    grp.title.parent = 'g1'; grp.subtitle.parent = 'g1';
+    res.push(compare(grp, 'Group (moved + scaled)', [1.3, 2.5]));
     return res;
   });
   if (process.env.DUMP) { const imgs = await p.evaluate(() => window.__imgs); if (imgs) imgs.forEach((d, i) => require('fs').writeFileSync(`${process.env.DUMPDIR || '.'}/dump-${i}.png`, Buffer.from(d.split(',')[1], 'base64'))); }

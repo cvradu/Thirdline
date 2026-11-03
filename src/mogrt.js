@@ -213,6 +213,7 @@
     // content sits (pos0 = content origin in comp space, F = content scale).
     function frame(id) {
       var d = C.L[id], Lo = layout();
+      if (d.kind === 'group') return { b: d.box, pos0: [0, 0], F: [1, 1] };
       if (d.kind === 'backdrop') {
         var bb = Lo.box;
         if (d.image) return { b: bb, pos0: [bb.x, bb.y], F: [bb.w / d.imgW, bb.h / d.imgH] };
@@ -882,7 +883,14 @@
         textLayer(id, ly, id, line, { kind: id, name: id === 'title' ? 'Title' : 'Subtitle', label: id === 'title' ? 'Title' : 'Subtitle', clipToBox: ly.clipToBox && CFG.boxLayer !== null });
       } else {
         const ly = st.layers && st.layers[id];
-        if (ly && ly.visible !== false) extraLayer(id, ly);
+        if (ly && ly.kind === 'group') {
+          // Groups have no AE layer: their transform is carried by the expressions of the layers in them.
+          const b = L.extras && L.extras[id];
+          CFG.L[id] = { kind: 'group', on: false, name: null, anim: ly.anim, vals: { ...TR_DEFAULT, ...(ly.transform || {}) }, keyed: [], box: b ? { x: b.x, y: b.y, w: b.w, h: b.h } : { ...L.box } };
+          markHandled(`layers.${id}`);
+          if (Object.keys(keys).some((k) => k.startsWith(`layers.${id}.transform.`) && keys[k].length)) warn(`Group “${ly.name}”: its keyframes are exported at their mid-hold value.`);
+          if ((ly.anim.in.type !== 'none' || ly.anim.out.type !== 'none')) warn(`Group “${ly.name}”: its In/Out animation isn’t carried over to After Effects.`);
+        } else if (ly && ly.visible !== false) extraLayer(id, ly);
       }
     }
     // Text layers referenced by layout before they were built (e.g. hidden subtitle).

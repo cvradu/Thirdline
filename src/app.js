@@ -174,7 +174,7 @@
   const pp = (k) => (isExtra(k) ? `layers.${k}` : k); // path prefix of a layer
   const lay = (k) => Engine.getLayer(state, k);
   const pathLayer = (p) => { const a = p.split('.'); return a[0] === 'layers' ? a[1] : a[0]; };
-  const KIND_COLOR = { text: '#a78bfa', image: '#ec4899', shape: '#ef4444' };
+  const KIND_COLOR = { text: '#a78bfa', image: '#ec4899', shape: '#ef4444', group: '#94a3b8' };
   function layerName(k) {
     if (LAYER_NAMES[k]) return LAYER_NAMES[k];
     const l = state.layers && state.layers[k];
@@ -1190,6 +1190,14 @@
   function extraPane(id) {
     const ly = lay(id), p = (k) => `layers.${id}.${k}`;
     let content;
+    if (ly.kind === 'group') {
+      const a = animPanel(id);
+      const [transform, , ...rest] = a; // groups have no mask of their own
+      return [inspHead(id), section('Group', [
+        el('div', { class: 'sub' }, 'Everything in this group moves, scales, rotates, fades and animates with it. Give it an In/Out animation to animate them all at once. Add or remove layers with their Parent setting.'),
+        row({ label: '', type: 'buttons', buttons: [['Ungroup', () => ungroup(id), 'Put the layers back on their own (Shift+Cmd/Ctrl+G)']] }),
+      ]), transform, ...rest].filter(Boolean).map(foldable);
+    }
     if (ly.kind === 'text') content = [textSection(id, 'Text'), effectsSection(id)];
     else if (ly.kind === 'image') content = [section('Logo / image', [
       row({ label: 'Image', type: 'custom', render: (ctl) => {
@@ -1245,7 +1253,7 @@
   }
 
   // ---------- Layers panel & animation library (Advanced) ----------
-  const KIND_ICON = { text: 'T', image: '▣', shape: '■' };
+  const KIND_ICON = { text: 'T', image: '▣', shape: '■', group: '❒' };
   let dragLayer = null;
   let layerSig = '';
   function renderLayerList() {
@@ -1253,14 +1261,26 @@
     if (sig === layerSig) return;
     layerSig = sig;
     const list = $('#layerList'); list.innerHTML = '';
-    for (const [k, name, color] of tracks()) {
+    // Groups list their layers right under them (indented, foldable).
+    const all = tracks();
+    const groupOf = (k) => { const p = (lay(k) || {}).parent; return p && lay(p) && lay(p).kind === 'group' ? p : null; };
+    const ordered = [];
+    const visit = (k, depth) => {
+      ordered.push([k, depth]);
+      if ((lay(k) || {}).kind === 'group' && !foldedGroups.has(k)) for (const [c] of all) if (groupOf(c) === k) visit(c, depth + 1);
+    };
+    for (const [k] of all) if (!groupOf(k)) visit(k, 0);
+    for (const [k, depth] of ordered) {
+      const [, name, color] = all.find((t) => t[0] === k);
       const ly = lay(k);
       const hidden = ly.visible === false;
       const icon = k === 'backdrop' ? '▭' : k === 'title' || k === 'subtitle' ? 'T' : KIND_ICON[ly.kind] || '■';
       const eye = el('button', { class: 'eye' + (hidden ? ' off' : ''), title: hidden ? 'Show layer' : 'Hide layer', onclick: (e) => { e.stopPropagation(); ly.visible = hidden; changed({ sync: true }); renderLayerList(); } }, '👁');
       const rowEl = el('div', { class: 'layer-row' + (selected === k ? ' on' : '') + (multiSel.length > 1 && multiSel.includes(k) ? ' multi' : '') + (hidden ? ' hidden-layer' : ''), draggable: 'true', 'data-layer': k, onclick: (e) => { if (advanced && (e.shiftKey || e.metaKey || e.ctrlKey)) toggleMulti(k); else selectLayer(k); } },
+        ly.kind === 'group' ? el('span', { class: 'fold', title: 'Show or hide the layers in this group', onclick: (e) => { e.stopPropagation(); foldedGroups.has(k) ? foldedGroups.delete(k) : foldedGroups.add(k); layerSig = ''; renderLayerList(); } }, foldedGroups.has(k) ? '▸' : '▾') : null,
         el('span', { class: 'ic', style: `background:${color}` }, icon), el('span', { class: 'nm' }, name), eye,
         isExtra(k) ? el('button', { class: 'x', title: 'Delete layer', onclick: (e) => { e.stopPropagation(); deleteLayer(k); } }, '✕') : null);
+      if (depth) rowEl.style.paddingLeft = `${8 + depth * 16}px`;
       rowEl.addEventListener('dragstart', () => { dragLayer = k; });
       rowEl.addEventListener('dragover', (e) => { e.preventDefault(); rowEl.classList.add('drag-over'); });
       rowEl.addEventListener('dragleave', () => rowEl.classList.remove('drag-over'));
@@ -1276,9 +1296,46 @@
       list.append(rowEl);
     }
   }
+  const foldedGroups = new Set();
+  // Group: a layer with no picture of its own. Layers inside move, scale, rotate, fade and animate with it.
+  function groupSelection() {
+    let ids = (multiSel.length ? multiSel : [selected]).filter(Boolean);
+    ids = ids.filter((k) => !ids.some((o) => o !== k && Engine.parentChain(state, k).includes(o)));
+    if (!ids.length) return toast('Select the layers to group (Shift-click in the layer list)');
+    const parents = new Set(ids.map((k) => lay(k).parent || null));
+    const id = newId();
+    const g = Presets.newLayer('shape', { name: `Group ${Object.values(state.layers || {}).filter((l) => l.kind === 'group').length + 1}` });
+    Object.assign(g, { kind: 'group' }); delete g.shape;
+    g.anim.in.type = 'none'; g.anim.out.type = 'none';
+    if (parents.size === 1 && [...parents][0]) g.parent = [...parents][0];
+    // A group starts with no transform, so its layers stay exactly where they are.
+    for (const k of ids) lay(k).parent = id;
+    state.layers = { ...(state.layers || {}), [id]: g };
+    const order = Engine.layerOrder(state).filter((x) => x !== id);
+    const top = Math.max(...ids.map((k) => order.indexOf(k)));
+    order.splice(top + 1, 0, id);
+    state.order = order;
+    changed({ sync: true });
+    selectLayer(id);
+    toast(`Grouped ${ids.length} layer${ids.length > 1 ? 's' : ''}`);
+  }
+  function ungroup(gid = selected) {
+    if (!gid || (lay(gid) || {}).kind !== 'group') return toast('Select a group to ungroup');
+    const up = lay(gid).parent || '';
+    const kids = tracks().map((t) => t[0]).filter((k) => lay(k).parent === gid);
+    for (const k of kids) setParent(k, up);
+    // Its own animation can't be kept once it's gone.
+    delete state.layers[gid];
+    state.order = (state.order || []).filter((x) => x !== gid);
+    for (const p of Object.keys(state.keys || {})) if (p.startsWith(`layers.${gid}.`)) delete state.keys[p];
+    changed({ sync: true });
+    selectLayer(kids[0] || null);
+    toast('Ungrouped');
+  }
   const newId = () => 'l' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
   const fileToDataURL = (f) => new Promise((r) => { const rd = new FileReader(); rd.onload = () => r(rd.result); rd.readAsDataURL(f); });
   async function addLayer(what) {
+    if (what === 'group') return groupSelection();
     let ly;
     if (what === 'text') ly = Presets.newLayer('text', { text: 'NEW TEXT', size: 22, weight: 700, color: state.backdrop.accentColor || '#f59e0b', letterSpacing: 2, y: -12, ax: 0, ay: 0, name: 'Text' });
     else if (what === 'image') {
@@ -3043,7 +3100,7 @@
   api.project.onOpenPath(async (p) => { if (!confirmDiscard()) return; const r = await api.project.read(p); if (r) loadProjectText(r.text, r.path); });
   api.onMenu((cmd) => ({
     new: newProject, open: openProject, save: () => saveProject(false), saveAs: () => saveProject(true),
-    export: () => $('#btnExport').click(), undo, redo, batch: openBatch, live: openLive, mogrt: () => openMogrt(), updates: () => checkUpdates(true), resetLayout: () => resetLayout(), duplicate: () => duplicateSelection(),
+    export: () => $('#btnExport').click(), undo, redo, batch: openBatch, live: openLive, mogrt: () => openMogrt(), updates: () => checkUpdates(true), resetLayout: () => resetLayout(), duplicate: () => duplicateSelection(), group: () => advanced && groupSelection(), ungroup: () => advanced && ungroup(),
   })[cmd]?.());
   $('#btnNew').onclick = newProject;
   $('#btnOpen').onclick = openProject;
@@ -3539,6 +3596,7 @@
   document.addEventListener('keydown', (e) => {
     // In the desktop app the Edit menu's Duplicate (Cmd/Ctrl+D) does this.
     if (api.browser && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'd' && !busy()) { e.preventDefault(); duplicateSelection(); }
+    if (api.browser && advanced && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'g' && !busy()) { e.preventDefault(); e.shiftKey ? ungroup() : groupSelection(); }
   });
 
   // ---------- Boot ----------

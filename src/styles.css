@@ -318,3 +318,5 @@ details.parts > summary::before { content: '▸ '; } details.parts[open] > summa
 .var-thumbs { display: flex; gap: 10px; margin-top: 6px; align-items: flex-end; }
 .var-thumbs figure { margin: 0; text-align: center; font-size: 10px; color: var(--muted); }
 .var-thumbs img { display: block; border: 1px solid var(--line); border-radius: 4px; background: repeating-conic-gradient(#3a3f4b 0 25%, #2b2f38 0 50%) 0 0/12px 12px; }
+
+.layer-row .fold { width: 12px; color: var(--muted); font-size: 10px; flex: none; }
