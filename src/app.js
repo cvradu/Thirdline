@@ -639,7 +639,10 @@
           api.fonts.openManager ? el('button', { type: 'button', class: 'ghost', title: 'Open Font Book to install or manage fonts; installed fonts show up in this list', onclick: async () => { const ok = await api.fonts.openManager(); if (!ok) toast('Could not open the font manager'); else { localFontsScanned = false; setTimeout(() => window.addEventListener('focus', () => scanLocalFonts(false), { once: true }), 500); } } }, 'Font Book') : null].filter(Boolean) }),
       row({ label: 'Weight', type: 'select', path: p('weight'), options: weightOptions(key), numeric: true }),
       row({ label: 'Size', type: 'range', path: p('size'), key: true, min: 8, max: 220, unit: 'px' }),
+      row({ label: 'Fill', type: 'select', path: p('fillType'), options: { solid: 'Solid colour', linear: 'Linear gradient', radial: 'Radial gradient' } }),
       row({ label: 'Color', type: 'color', path: p('color'), key: true }),
+      row({ label: 'Gradient to', type: 'color', path: p('color2'), key: true, show: () => !!lay(key) && (lay(key).fillType || 'solid') !== 'solid' }),
+      row({ label: 'Gradient angle', type: 'range', path: p('gradAngle'), key: true, min: 0, max: 360, unit: '°', show: () => !!lay(key) && lay(key).fillType === 'linear' }),
       row({ label: 'Letter spacing', type: 'range', path: p('letterSpacing'), key: true, min: -10, max: 40, step: 0.5, unit: 'px' }),
       row({ label: 'Style', type: 'checkbox', path: p('uppercase'), text: 'UPPERCASE' }),
       row({ label: '', type: 'checkbox', path: p('italic'), text: 'Italic' }),
@@ -672,7 +675,15 @@
   const isShape = (s) => s.backdrop.type === 'shape';
   const shapeIn = (...names) => (s) => isShape(s) && names.includes(s.backdrop.shape);
   const usesAccent = shapeIn('accent', 'twoTone', 'underline', 'sideBar', 'corners');
-  const usesFill = (s) => isShape(s) && !['underline', 'sideBar', 'corners'].includes(s.backdrop.shape);
+  const canFill = (s) => isShape(s) && !['underline', 'sideBar', 'corners'].includes(s.backdrop.shape);
+  const usesFill = (s) => canFill(s) && s.backdrop.fillOn !== false;
+  // Fill on/off plus an outline (stroke) with its own colour and width, for the backdrop shape.
+  const bdFillStrokeRows = () => [
+    row({ label: 'Fill', type: 'checkbox', path: 'backdrop.fillOn', text: 'Fill the shape', show: canFill }),
+    row({ label: 'Stroke', type: 'checkbox', path: 'backdrop.stroke.on', text: 'Outline the shape', show: canFill }),
+    row({ label: 'Stroke colour', type: 'color', path: 'backdrop.stroke.color', key: true, swatches: false, show: (s) => canFill(s) && s.backdrop.stroke.on }),
+    row({ label: 'Stroke width', type: 'range', path: 'backdrop.stroke.width', key: true, min: 0.5, max: 40, step: 0.5, unit: 'px', show: (s) => canFill(s) && s.backdrop.stroke.on }),
+  ];
   // Linear / radial: a count (2–4) and a picker for each colour (1 = start … last = end).
   function gradColourRows(keyed) {
     const lin = (s) => usesFill(s) && (ft(s) === 'linear' || ft(s) === 'radial');
@@ -761,8 +772,9 @@
       section('Backdrop', [
         row({ label: 'Type', type: 'select', path: 'backdrop.type', options: { shape: 'Shape', image: 'Image', none: 'None (text only)' } }),
         row({ label: 'Shape', type: 'select', path: 'backdrop.shape', options: SHAPES, show: isShape }),
-        row({ label: 'Fill', type: 'select', path: 'backdrop.fillType', options: Engine.GRADIENT_TYPES, show: usesFill }),
-        row({ label: 'Colour', type: 'color', path: 'backdrop.fill', key: true, show: (s) => usesFill(s) && ft(s) === 'solid' }),
+        ...bdFillStrokeRows(),
+        row({ label: 'Fill type', type: 'select', path: 'backdrop.fillType', options: Engine.GRADIENT_TYPES, show: usesFill }),
+        row({ label: 'Fill colour', type: 'color', path: 'backdrop.fill', key: true, show: (s) => usesFill(s) && ft(s) === 'solid' }),
         row({ label: 'Gradient look', type: 'custom', show: (s) => usesFill(s) && ft(s) !== 'solid', render: (ctl) => {
           const sel = el('select');
           fillSelect(sel, [['', 'Apply a sample…'], ...Presets.GRADIENTS.map((g, i) => [String(i), g.name])]);
@@ -1392,8 +1404,11 @@
     ])];
     else content = [section('Shape', [
       row({ label: 'Shape', type: 'select', path: p('shape'), options: Engine.EXTRA_SHAPES, onSet: (v) => { if (v === 'path') shapeToPath(id); changed({ sync: true }); } }),
-      row({ label: 'Fill', type: 'checkbox', path: p('fill'), text: 'Fill the inside', show: () => isPathLayer(id) }),
-      row({ label: 'Colour', type: 'color', path: p('color'), key: true, show: () => !isPathLayer(id) || lay(id).fill !== false }),
+      row({ label: 'Fill', type: 'checkbox', path: p('fill'), text: 'Fill the inside', show: () => !!lay(id) && (!isPathLayer(id) || !!lay(id).closed || lay(id).fill !== false) }),
+      row({ label: 'Fill colour', type: 'color', path: p('color'), key: true, show: () => !!lay(id) && lay(id).fill !== false }),
+      row({ label: 'Stroke', type: 'checkbox', path: p('stroke.on'), text: 'Outline' }),
+      row({ label: 'Stroke colour', type: 'color', path: p('stroke.color'), key: true, swatches: false, show: () => lay(id) && lay(id).stroke.on }),
+      row({ label: 'Stroke width', type: 'range', path: p('stroke.width'), key: true, min: 0.5, max: 60, step: 0.5, unit: 'px', show: () => lay(id) && lay(id).stroke.on }),
       row({ label: 'Width', type: 'range', path: p('w'), key: true, min: 0, max: 1920, unit: 'px', show: () => !isPathLayer(id) }),
       row({ label: 'Height', type: 'range', path: p('h'), key: true, min: 0, max: 1080, unit: 'px', show: () => !isPathLayer(id) }),
       row({ label: '', type: 'custom', show: () => !isPathLayer(id), render: (ctl) => { ctl.append(el('span', { class: 'sub', style: 'margin:0' }, 'Width or height 0 = match the lower third box.')); } }),
@@ -1402,9 +1417,6 @@
       ...tornRows(`layers.${id}`, () => !!lay(id) && lay(id).kind === 'shape' && (lay(id).shape !== 'path' || !!lay(id).closed)),
       ...pathRows(id, false, () => isPathLayer(id)),
       row({ label: 'Opacity', type: 'range', path: p('opacity'), key: true, min: 0, max: 100, scale: 100, unit: '%' }),
-      row({ label: 'Stroke', type: 'checkbox', path: p('stroke.on'), text: 'On' }),
-      row({ label: 'Stroke width', type: 'range', path: p('stroke.width'), key: true, min: 0.5, max: 60, step: 0.5, unit: 'px', show: () => lay(id) && lay(id).stroke.on }),
-      row({ label: 'Stroke colour', type: 'color', path: p('stroke.color'), key: true, swatches: false, show: () => lay(id) && lay(id).stroke.on }),
       row({ label: 'Line ends', type: 'select', path: p('stroke.cap'), options: { round: 'Round', square: 'Square', butt: 'Flat' }, show: () => isPathLayer(id) && lay(id).stroke.on }),
       row({ label: 'Draw on', type: 'range', path: p('trim.end'), key: true, keyLabel: 'Trim end', min: 0, max: 100, step: 0.5, unit: '%', show: () => isPathLayer(id), title: 'Trim path end: keyframe 0 → 100% to draw the line on' }),
       row({ label: 'Trim start', type: 'range', path: p('trim.start'), key: true, min: 0, max: 100, step: 0.5, unit: '%', show: () => isPathLayer(id) }),
@@ -1984,7 +1996,8 @@
       el('div', { class: 'more-body' },
         row({ label: 'Backdrop', type: 'select', path: 'backdrop.type', options: { shape: 'Shape', image: 'Image', none: 'None (text only)' } }),
         row({ label: 'Shape', type: 'select', path: 'backdrop.shape', options: SHAPES, show: isShape }),
-        row({ label: 'Fill', type: 'select', path: 'backdrop.fillType', options: Engine.GRADIENT_TYPES, show: usesFill }),
+        ...bdFillStrokeRows(),
+        row({ label: 'Fill type', type: 'select', path: 'backdrop.fillType', options: Engine.GRADIENT_TYPES, show: usesFill }),
         row({ label: 'Gradient', type: 'custom', show: (s) => usesFill(s) && ft(s) !== 'solid', render: (ctl) => {
           const sel = el('select');
           fillSelect(sel, [['', 'Pick a look…'], ...Presets.GRADIENTS.map((g, i) => [String(i), g.name])]);

@@ -75,13 +75,13 @@
     const outEnd = duration - (outA.offset || 0);
     const outDur = outA.type === 'none' ? 0 : Math.max(0.001, outA.duration);
     const outStart = outEnd - outDur;
-    if (t < inStart) return { visible: false, phase: 'before', raw: 0, p: 0 };
+    if (t < inStart) return { visible: false, phase: 'before', raw: 0, p: 0, anim: inA };
     if (inDur > 0 && t < inStart + inDur) {
       const raw = (t - inStart) / inDur;
       return { visible: true, phase: 'in', raw, ease: getEasing(inA.easing, inA.bezier), anim: inA, p: getEasing(inA.easing, inA.bezier)(raw) };
     }
     if (outA.type === 'none') {
-      return t <= outEnd || outA.offset === 0 ? { visible: true, phase: 'hold', raw: 1, p: 1 } : { visible: false, phase: 'after', raw: 1, p: 0 };
+      return t <= outEnd || outA.offset === 0 ? { visible: true, phase: 'hold', raw: 1, p: 1 } : { visible: false, phase: 'after', raw: 1, p: 0, anim: outA };
     }
     if (t < outStart) return { visible: true, phase: 'hold', raw: 1, p: 1 };
     if (t < outEnd) {
@@ -89,7 +89,7 @@
       const ease = getEasing(outA.easing, outA.bezier);
       return { visible: true, phase: 'out', raw, ease, anim: outA, p: 1 - ease(raw) };
     }
-    return { visible: false, phase: 'after', raw: 1, p: 0 };
+    return { visible: false, phase: 'after', raw: 1, p: 0, anim: outA };
   }
 
   function timingSpans(anim, duration) {
@@ -436,7 +436,9 @@
 
   // On the way out, directional wipes/masks are mirrored so the label describes the motion.
   const OUT_SWAP = { wipeLeft: 'wipeRight', wipeRight: 'wipeLeft', wipeUp: 'wipeDown', wipeDown: 'wipeUp', maskUp: 'maskDown', maskDown: 'maskUp' };
-  const effType = (ph) => (ph.phase === 'hold' ? 'none' : ph.phase === 'out' ? OUT_SWAP[ph.anim.type] || ph.anim.type : ph.anim.type);
+  // Before a layer comes in it sits at the start of its In; after it leaves, at the end of its Out
+  // (children tethered to it follow it there).
+  const effType = (ph) => (ph.phase === 'hold' || !ph.anim ? 'none' : ph.phase === 'out' ? OUT_SWAP[ph.anim.type] || ph.anim.type : ph.anim.type);
 
   // ---------- Generic element transform from animation ----------
   // b = element bounds. Returns parameters to apply around the element draw.
@@ -790,16 +792,36 @@
   }
   // Fill a path with the backdrop fill (shadow comes from the base fill, overlays are clipped).
   function paintFill(ctx, bd, b, path) {
-    const f = fillFor(ctx, bd, b);
-    path(); ctx.fillStyle = f.style; ctx.fill();
-    if (f.overlay) {
-      ctx.save();
-      ctx.shadowColor = 'transparent';
-      path(); ctx.clip();
-      f.overlay(ctx);
-      ctx.restore();
+    const filled = bd.fillOn !== false;
+    if (filled) {
+      const f = fillFor(ctx, bd, b);
+      path(); ctx.fillStyle = f.style; ctx.fill();
+      if (f.overlay) {
+        ctx.save();
+        ctx.shadowColor = 'transparent';
+        path(); ctx.clip();
+        f.overlay(ctx);
+        ctx.restore();
+      }
+      drawTexture(ctx, bd, b, path);
     }
-    drawTexture(ctx, bd, b, path);
+    strokeShape(ctx, bd.stroke, path, filled);
+  }
+  // Outline a shape along its edge (centred on it, like After Effects' shape stroke).
+  // With a fill, the fill already cast the shadow, so the stroke doesn't cast a second one.
+  function strokeShape(ctx, st, path, filled, cap) {
+    if (!st || !st.on || !(st.width > 0)) return;
+    ctx.save();
+    if (filled) ctx.shadowColor = 'transparent';
+    if (path) path();
+    ctx.lineWidth = st.width; ctx.strokeStyle = st.color || '#ffffff'; ctx.lineJoin = 'miter'; ctx.miterLimit = 10; ctx.lineCap = cap || 'butt';
+    ctx.stroke();
+    ctx.restore();
+  }
+  // Text fill: a solid colour, or a linear / radial gradient across the line.
+  function textFill(ctx, s, b) {
+    if (!s.fillType || s.fillType === 'solid') return s.color;
+    return fillFor(ctx, { fill: s.color, fill2: s.color2 || s.color, fillType: s.fillType, gradientAngle: s.gradAngle ?? 90, gradStops: 2, gradAnim: 'none', gradCX: 50, gradCY: 50, gradRadius: 75 }, b).style;
   }
   const BLEND_MODES = {
     'source-over': 'Normal', multiply: 'Multiply', screen: 'Screen', overlay: 'Overlay', 'soft-light': 'Soft light',
@@ -1037,7 +1059,7 @@
     setTextStyle(ctx, s);
     const baseLs = (s.letterSpacing || 0) + (line.extraLs || 0) + (tr.tracking || 0);
     ctx.letterSpacing = `${baseLs}px`;
-    ctx.fillStyle = s.color;
+    ctx.fillStyle = textFill(ctx, s, b);
     textShadow(ctx, s);
     applyLayerTransform(ctx, tr, b);
     applyLoop(ctx, s.anim, curT, state.comp.duration, b, pivotOf(tr, b));
@@ -1306,8 +1328,9 @@
         else if (ly.shape === 'ellipse') ctx.ellipse(b.x + b.w / 2, b.y + b.h / 2, b.w / 2, b.h / 2, 0, 0, Math.PI * 2);
         else if (ly.shape === 'rounded' || ly.shape === 'line' || (ly.corners && ly.corners.on)) roundRectPath(ctx, b.x, b.y, b.w, b.h, ly.shape === 'line' ? b.h / 2 : cornerRadii(ly));
         else ctx.rect(b.x, b.y, b.w, b.h);
-        ctx.fill();
-        if (ly.stroke && ly.stroke.on && ly.stroke.width > 0) { ctx.shadowColor = 'transparent'; ctx.lineWidth = ly.stroke.width; ctx.strokeStyle = ly.stroke.color; ctx.stroke(); }
+        const filled = ly.fill !== false;
+        if (filled) ctx.fill();
+        strokeShape(ctx, ly.stroke, null, filled, ly.shape === 'line' ? 'round' : 'butt');
       }
     }
     layerBlur = 0;

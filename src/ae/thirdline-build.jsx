@@ -215,16 +215,19 @@
           try { mg.property('ADBE Vector Merge Type').setValue(it.mode); } catch (e) { note('Merge Paths mode: ' + e.toString()); }
         }
       }
-      var fill = inner().addProperty('ADBE Vector Graphic - Fill');
-      var fi = fill.propertyIndex;
-      var col = G.fill.color;
-      setProp(inner().property(fi).property('ADBE Vector Fill Color'), { value: col.value.length === 3 ? [col.value[0], col.value[1], col.value[2], 1] : col.value, keys: col.keys ? fix4(col.keys) : null });
-      if (G.fill.eg) egQueue.push({ get: (function (fi) { return function () { return inner().property(fi).property('ADBE Vector Fill Color'); }; })(fi), name: G.fill.eg });
+      if (!G.fill.off) {
+        var fill = inner().addProperty('ADBE Vector Graphic - Fill');
+        var fi = fill.propertyIndex;
+        var col = G.fill.color;
+        setProp(inner().property(fi).property('ADBE Vector Fill Color'), { value: col.value.length === 3 ? [col.value[0], col.value[1], col.value[2], 1] : col.value, keys: col.keys ? fix4(col.keys) : null });
+        if (G.fill.eg) egQueue.push({ get: (function (fi) { return function () { return inner().property(fi).property('ADBE Vector Fill Color'); }; })(fi), name: G.fill.eg });
+      }
       if (G.stroke) {
         var stk = inner().addProperty('ADBE Vector Graphic - Stroke');
         var sti = stk.propertyIndex;
         inner().property(sti).property('ADBE Vector Stroke Color').setValue([G.stroke.color[0], G.stroke.color[1], G.stroke.color[2], 1]);
         inner().property(sti).property('ADBE Vector Stroke Width').setValue(G.stroke.width);
+        if (G.stroke.eg) egQueue.push({ get: (function (sti) { return function () { return inner().property(sti).property('ADBE Vector Stroke Color'); }; })(sti), name: G.stroke.eg });
       }
     }
   }

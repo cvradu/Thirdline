@@ -91,7 +91,7 @@
       return { visible: false, phase: 'after', raw: 1, p: 0 };
     }
     var OUT_SWAP = { wipeLeft: 'wipeRight', wipeRight: 'wipeLeft', wipeUp: 'wipeDown', wipeDown: 'wipeUp', maskUp: 'maskDown', maskDown: 'maskUp' };
-    function effType(ph) { return ph.phase === 'hold' ? 'none' : ph.phase === 'out' ? OUT_SWAP[ph.anim.type] || ph.anim.type : ph.anim.type; }
+    function effType(ph) { return ph.phase === 'hold' || !ph.anim ? 'none' : ph.phase === 'out' ? OUT_SWAP[ph.anim.type] || ph.anim.type : ph.anim.type; }
     var PER = { lettersFade: 1, lettersRise: 1, lettersDrop: 1, lettersScale: 1, lettersBlur: 1, typewriter: 1, wordsRise: 1 };
 
     // Same as Engine animParams.
@@ -757,6 +757,7 @@
       if (ly.glow && ly.glow.on && ly.glow.size > 0) effects.push(shadowFx('TL Glow', ly.glow, true));
       if (ly.shadow && ly.shadow.on) effects.push(shadowFx('TL Shadow', ly.shadow));
       effects.push(...blurEffect(id, mayBlur(ly, prefix)));
+      if (ly.fillType && ly.fillType !== 'solid') warn(`${name}: text gradients export as the first colour for now.`);
       const font = fontKey(ly);
       layers.push({
         id, name, kind: 'text', ...inOut(ly),
@@ -824,8 +825,11 @@
       if (s === 'corners') ['cornerTL1', 'cornerTL2', 'cornerBR1', 'cornerBR2'].forEach((c, i) => accent.push(rectGroup(`Corner ${i + 1}`, c, accColor, i === 0 ? 'Accent colour' : null)));
       if (!main.length && !accent.length) main.push(rectGroup('Box', 'box', fillColor, 'Backdrop colour'));
 
+      const bdStroke = bd.stroke && bd.stroke.on && bd.stroke.width > 0 ? { color: hexRGB(bd.stroke.color), width: bd.stroke.width, eg: 'Backdrop outline colour' } : null;
+      const noFill = bd.fillOn === false;
+      main.forEach((g) => { if (bdStroke) g.stroke = bdStroke; if (noFill) { g.fill.off = true; g.fill.eg = null; } });
       const gradFx = [];
-      if (ft !== 'solid' && main.length) {
+      if (ft !== 'solid' && main.length && !noFill) {
         if (ft === 'fourPoint') {
           gradFx.push({ match: 'ADBE 4ColorGradient', name: 'TL Gradient', params: [
             { sel: 'TwoD:0', ...exprCall("T.grad('p1')") }, { sel: 'COLOR:0', value: [...hexRGB(bd.fill), 1], eg: 'Gradient colour 1' },
@@ -897,8 +901,8 @@
       layers.push({ ...base, kind: 'shape', groups: [{
         name,
         items: [{ type: ly.shape === 'ellipse' ? 'ellipse' : 'rect', size: call('size'), pos: call('pos'), round: call('round') }],
-        fill: { color, eg: `${name} colour` },
-        stroke: ly.stroke && ly.stroke.on && ly.stroke.width > 0 ? { color: hexRGB(ly.stroke.color), width: ly.stroke.width } : null,
+        fill: ly.fill === false ? { color, off: true } : { color, eg: `${name} colour` },
+        stroke: ly.stroke && ly.stroke.on && ly.stroke.width > 0 ? { color: hexRGB(ly.stroke.color), width: ly.stroke.width, eg: `${name} outline colour` } : null,
       }] });
     }
 
