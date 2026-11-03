@@ -227,10 +227,99 @@
   }
   function imagesReady(state) {
     const bd = state.backdrop;
-    if (bd.type !== 'image' || !bd.image.src) return Promise.resolve();
-    const img = getImage(bd.image.src);
-    if (img.complete) return Promise.resolve();
-    return new Promise((r) => { img.addEventListener('load', r, { once: true }); img.addEventListener('error', r, { once: true }); });
+    const srcs = [bd.type === 'image' && bd.image.src, bd.texture && bd.texture.enabled && bd.texture.src].filter(Boolean);
+    return Promise.all(srcs.map((src) => {
+      const img = getImage(src);
+      if (img.complete) return null;
+      return new Promise((r) => { img.addEventListener('load', r, { once: true }); img.addEventListener('error', r, { once: true }); });
+    }));
+  }
+
+  // ---------- Keyframes ----------
+  // state.keys = { 'title.transform.x': [{ t, v, e }] } — any numeric or #hex colour path can be keyed.
+  // e is the easing used from that key to the next ('hold' keeps the value).
+  function hexToRgb(h) {
+    let x = h.slice(1); if (x.length === 3) x = x.split('').map((c) => c + c).join('');
+    const n = parseInt(x.slice(0, 6), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+  function lerpValue(a, b, f) {
+    if (typeof a === 'number' && typeof b === 'number') return a + (b - a) * f;
+    if (typeof a === 'string' && typeof b === 'string' && a[0] === '#' && b[0] === '#') {
+      const A = hexToRgb(a), B = hexToRgb(b);
+      return '#' + A.map((c, i) => Math.round(c + (B[i] - c) * f).toString(16).padStart(2, '0')).join('');
+    }
+    return f < 1 ? a : b;
+  }
+  function valueAtKeys(ks, t) {
+    if (!ks || !ks.length) return undefined;
+    if (t <= ks[0].t) return ks[0].v;
+    const last = ks[ks.length - 1];
+    if (t >= last.t) return last.v;
+    let i = 0; while (i < ks.length - 2 && ks[i + 1].t <= t) i++;
+    const a = ks[i], b = ks[i + 1];
+    if (a.e === 'hold') return a.v;
+    const f = getEasing(a.e || 'easeInOutCubic', a.bezier)((t - a.t) / Math.max(1e-9, b.t - a.t));
+    return lerpValue(a.v, b.v, f);
+  }
+  // Returns a copy of state with every keyed path replaced by its value at time t (copy-on-write).
+  function resolveAt(state, t) {
+    const keys = state.keys;
+    if (!keys) return state;
+    const paths = Object.keys(keys).filter((p) => keys[p] && keys[p].length);
+    if (!paths.length) return state;
+    const out = { ...state };
+    const copied = new WeakSet([out]);
+    for (const path of paths) {
+      const parts = path.split('.');
+      let cur = out, ok = true;
+      for (let i = 0; i < parts.length - 1; i++) {
+        const k = parts[i];
+        const next = cur[k];
+        if (next == null || typeof next !== 'object') { ok = false; break; }
+        if (!copied.has(next)) { cur[k] = Array.isArray(next) ? [...next] : { ...next }; copied.add(cur[k]); }
+        cur = cur[k];
+      }
+      if (ok) cur[parts[parts.length - 1]] = valueAtKeys(keys[path], t);
+    }
+    return out;
+  }
+
+  // ---------- Layer transform (Advanced) ----------
+  const NO_TR = { x: 0, y: 0, scale: 100, rotation: 0, opacity: 100, blur: 0, tracking: 0 };
+  let layerBlur = 0;
+  function applyLayerTransform(ctx, tr, cx, cy, withAlpha = true) {
+    if (!tr) return;
+    if (tr.x || tr.y) ctx.translate(tr.x || 0, tr.y || 0);
+    const sc = (tr.scale ?? 100) / 100, sx = sc * ((tr.scaleX ?? 100) / 100), sy = sc * ((tr.scaleY ?? 100) / 100);
+    if (tr.rotation || sx !== 1 || sy !== 1) {
+      ctx.translate(cx, cy);
+      if (tr.rotation) ctx.rotate((tr.rotation * Math.PI) / 180);
+      ctx.scale(Math.max(1e-4, sx), Math.max(1e-4, sy));
+      ctx.translate(-cx, -cy);
+    }
+    if (withAlpha && (tr.opacity ?? 100) < 100) ctx.globalAlpha *= clamp((tr.opacity ?? 100) / 100);
+  }
+  const blurFilter = (b) => (b > 0.05 ? `blur(${b.toFixed(2)}px)` : 'none');
+
+  // ---------- Text animator range selector (After Effects style) ----------
+  function selectorAmount(a, i, n) {
+    if (n <= 0) return 0;
+    let s = (a.start ?? 0) + (a.offset ?? 0), e = (a.end ?? 100) + (a.offset ?? 0);
+    if (s > e) [s, e] = [e, s];
+    const c0 = (i / n) * 100, c1 = ((i + 1) / n) * 100;
+    let amt;
+    const shape = a.shape || 'square';
+    if (shape === 'square') amt = clamp((Math.min(e, c1) - Math.max(s, c0)) / (c1 - c0));
+    else {
+      const r = e - s <= 1e-6 ? ((c0 + c1) / 2 < s ? -1 : 2) : ((c0 + c1) / 2 - s) / (e - s);
+      if (shape === 'rampUp') amt = r < 0 ? 0 : r > 1 ? 1 : r;
+      else if (shape === 'rampDown') amt = r < 0 ? 1 : r > 1 ? 0 : 1 - r;
+      else if (r < 0 || r > 1) amt = 0;
+      else if (shape === 'triangle') amt = 1 - Math.abs(2 * r - 1);
+      else if (shape === 'round') amt = Math.sqrt(Math.max(0, 1 - (2 * r - 1) ** 2));
+      else amt = 0.5 - 0.5 * Math.cos(2 * Math.PI * r); // smooth
+    }
+    return amt * ((a.amount ?? 100) / 100);
   }
 
   // On the way out, directional wipes/masks are mirrored so the label describes the motion.
@@ -270,7 +359,7 @@
 
   function applyParams(ctx, r, margin = 0) {
     if (r.alpha < 1) ctx.globalAlpha *= clamp(r.alpha);
-    if (r.blur > 0.05) ctx.filter = `blur(${r.blur.toFixed(2)}px)`;
+    if (r.blur + layerBlur > 0.05) ctx.filter = blurFilter(r.blur + layerBlur);
     if (r.clip) {
       ctx.beginPath();
       // Expand the clip along the non-animated axis so shadows are not cropped.
@@ -298,15 +387,143 @@
     ctx.arcTo(x, y, x + w, y, r);
     ctx.closePath();
   }
-  function fillStyleFor(ctx, bd, b, c1 = bd.fill, c2 = bd.fill2) {
-    if (!bd.gradient) return c1;
-    const ang = ((bd.gradientAngle || 0) * Math.PI) / 180;
-    const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
-    const dx = (Math.cos(ang) * b.w) / 2, dy = (Math.sin(ang) * b.h) / 2;
-    const g = ctx.createLinearGradient(cx - dx, cy - dy, cx + dx, cy + dy);
-    g.addColorStop(0, c1);
-    g.addColorStop(1, c2);
-    return g;
+  // ---------- Backdrop fills: solid, linear, radial, 4-point, with optional animation ----------
+  const GRADIENT_TYPES = { solid: 'Solid colour', linear: 'Linear gradient', radial: 'Radial gradient', fourPoint: '4-point gradient' };
+  const GRADIENT_ANIMS = {
+    none: 'Static', rotate: 'Rotate (linear)', slide: 'Slide / flow (linear)', shimmer: 'Shimmer sweep (any)',
+    pulse: 'Pulse (radial)', orbit: 'Orbit (radial)', swirl: 'Swirl colours (4-point)', breathe: 'Breathe colours (4-point)',
+  };
+  let curT = 0;
+  const mixHex = (a, b, f) => lerpValue(a, b, clamp(f));
+  const fillType = (bd) => bd.fillType || (bd.gradient ? 'linear' : 'solid');
+  const fourCache = new Map();
+  function fourPointImage(c) {
+    const key = c.join();
+    let cv = fourCache.get(key);
+    if (cv) return cv;
+    const N = 48;
+    cv = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(N, N) : Object.assign(document.createElement('canvas'), { width: N, height: N });
+    const g = cv.getContext('2d');
+    const img = g.createImageData(N, N);
+    const [tl, tr, br, bl] = c.map(hexToRgb);
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+      const u = x / (N - 1), v = y / (N - 1);
+      // smoothstep the weights for softer blending
+      const su = u * u * (3 - 2 * u), sv = v * v * (3 - 2 * v);
+      const i = (y * N + x) * 4;
+      for (let ch = 0; ch < 3; ch++) {
+        const top = tl[ch] + (tr[ch] - tl[ch]) * su, bot = bl[ch] + (br[ch] - bl[ch]) * su;
+        img.data[i + ch] = top + (bot - top) * sv;
+      }
+      img.data[i + 3] = 255;
+    }
+    g.putImageData(img, 0, 0);
+    if (fourCache.size > 64) fourCache.clear();
+    fourCache.set(key, cv);
+    return cv;
+  }
+  // Returns { style, overlay? } for the backdrop's main fill at the current time.
+  function fillFor(ctx, bd, b) {
+    const type = fillType(bd);
+    const anim = bd.gradAnim || 'none';
+    const ph = anim === 'none' ? 0 : ((curT / Math.max(0.1, bd.gradSpeed || 4)) % 1 + 1) % 1;
+    const c1 = bd.fill, c2 = bd.fill2 || bd.fill, c3 = bd.fill3 || c2, c4 = bd.fill4 || c1;
+    let style = c1, overlay = null;
+    if (type === 'linear') {
+      const ang = (((bd.gradientAngle || 0) + (anim === 'rotate' ? ph * 360 : 0)) * Math.PI) / 180;
+      const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+      const half = (Math.abs(Math.cos(ang)) * b.w + Math.abs(Math.sin(ang)) * b.h) / 2;
+      const dx = Math.cos(ang) * half, dy = Math.sin(ang) * half;
+      const g = ctx.createLinearGradient(cx - dx, cy - dy, cx + dx, cy + dy);
+      if (anim === 'slide') {
+        // Seamless flowing c1 → c2 → c1 band
+        for (let i = 0; i <= 12; i++) {
+          const u = i / 12, w = ((u * 0.5 - ph) % 1 + 1) % 1;
+          g.addColorStop(u, mixHex(c1, c2, 1 - Math.abs(2 * w - 1)));
+        }
+      } else { g.addColorStop(0, c1); g.addColorStop(1, c2); }
+      style = g;
+    } else if (type === 'radial') {
+      let cx = b.x + ((bd.gradCX ?? 50) / 100) * b.w, cy = b.y + ((bd.gradCY ?? 50) / 100) * b.h;
+      let r = ((bd.gradRadius ?? 75) / 100) * Math.hypot(b.w, b.h) / 2;
+      if (anim === 'orbit') { cx += Math.cos(ph * 2 * Math.PI) * b.w * 0.3; cy += Math.sin(ph * 2 * Math.PI) * b.h * 0.3; }
+      if (anim === 'pulse') r *= 0.7 + 0.3 * (0.5 + 0.5 * Math.sin(ph * 2 * Math.PI));
+      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(1, r));
+      g.addColorStop(0, c1); g.addColorStop(1, c2);
+      style = g;
+    } else if (type === 'fourPoint') {
+      let cs = [c1, c2, c3, c4];
+      if (anim === 'swirl') {
+        const ring = [c1, c2, c3, c4];
+        cs = [0, 1, 2, 3].map((k) => { const pos = (k + ph * 4) % 4, i = Math.floor(pos); return mixHex(ring[i], ring[(i + 1) % 4], pos - i); });
+      } else if (anim === 'breathe') {
+        const f = 0.5 - 0.5 * Math.cos(ph * 2 * Math.PI);
+        cs = [mixHex(c1, c3, f), mixHex(c2, c4, f), mixHex(c3, c1, f), mixHex(c4, c2, f)];
+      }
+      style = cs[0];
+      const img = fourPointImage(cs);
+      overlay = (c) => { c.imageSmoothingEnabled = true; c.imageSmoothingQuality = 'high'; c.drawImage(img, b.x, b.y, b.w, b.h); };
+    }
+    if (anim === 'shimmer') {
+      const prev = overlay;
+      overlay = (c) => {
+        prev && prev(c);
+        const pos = -0.3 + ph * 1.6, x0 = b.x - b.h, x1 = b.x + b.w + b.h;
+        const sx = x0 + (x1 - x0) * pos;
+        const g = c.createLinearGradient(sx - b.h, b.y, sx + b.h, b.y + b.h);
+        const hi = rgba(bd.shimmerColor || '#ffffff', bd.shimmerOpacity ?? 0.45);
+        g.addColorStop(0, rgba('#ffffff', 0)); g.addColorStop(0.5, hi); g.addColorStop(1, rgba('#ffffff', 0));
+        c.fillStyle = g; c.fillRect(b.x, b.y, b.w, b.h);
+      };
+    }
+    return { style, overlay };
+  }
+  // Fill a path with the backdrop fill (shadow comes from the base fill, overlays are clipped).
+  function paintFill(ctx, bd, b, path) {
+    const f = fillFor(ctx, bd, b);
+    path(); ctx.fillStyle = f.style; ctx.fill();
+    if (f.overlay) {
+      ctx.save();
+      ctx.shadowColor = 'transparent';
+      path(); ctx.clip();
+      f.overlay(ctx);
+      ctx.restore();
+    }
+    drawTexture(ctx, bd, b, path);
+  }
+  const BLEND_MODES = {
+    'source-over': 'Normal', multiply: 'Multiply', screen: 'Screen', overlay: 'Overlay', 'soft-light': 'Soft light',
+    'hard-light': 'Hard light', 'color-dodge': 'Colour dodge', 'color-burn': 'Colour burn', darken: 'Darken', lighten: 'Lighten',
+    difference: 'Difference', exclusion: 'Exclusion', luminosity: 'Luminosity', color: 'Colour', 'source-atop': 'Replace (keep shape)',
+  };
+  // Texture overlay: an image blended onto the backdrop, clipped to the backdrop's shape.
+  function drawTexture(ctx, bd, b, path) {
+    const tx = bd.texture;
+    if (!tx || !tx.src || !tx.enabled) return;
+    const img = getImage(tx.src);
+    if (!img || !img.complete || !img.naturalWidth) return;
+    ctx.save();
+    ctx.shadowColor = 'transparent';
+    path(); ctx.clip();
+    ctx.globalAlpha *= clamp(tx.opacity ?? 1);
+    ctx.globalCompositeOperation = tx.blend || 'overlay';
+    const sc = Math.max(0.01, tx.scale ?? 1);
+    const ox = tx.offsetX || 0, oy = tx.offsetY || 0;
+    // Optional drift so textures can move (px per second)
+    const dx = ox + (tx.driftX || 0) * curT, dy = oy + (tx.driftY || 0) * curT;
+    if (tx.fit === 'tile') {
+      const tw = img.naturalWidth * sc, th = img.naturalHeight * sc;
+      const sx0 = b.x + (((dx % tw) + tw) % tw) - tw, sy0 = b.y + (((dy % th) + th) % th) - th;
+      for (let y = sy0; y < b.y + b.h; y += th) for (let x = sx0; x < b.x + b.w; x += tw) ctx.drawImage(img, x, y, tw, th);
+    } else if (tx.fit === 'stretch') {
+      ctx.drawImage(img, b.x + dx, b.y + dy, b.w * sc, b.h * sc);
+    } else {
+      // cover
+      const k = Math.max(b.w / img.naturalWidth, b.h / img.naturalHeight) * sc;
+      const w = img.naturalWidth * k, h = img.naturalHeight * k;
+      ctx.drawImage(img, b.x + (b.w - w) / 2 + dx, b.y + (b.h - h) / 2 + dy, w, h);
+    }
+    ctx.restore();
   }
   function rgba(hex, a = 1) {
     if (!hex) return 'rgba(0,0,0,0)';
@@ -335,6 +552,18 @@
       const img = bd.image.src ? getImage(bd.image.src) : null;
       if (img && img.complete && img.naturalWidth) {
         ctx.drawImage(img, b.x, b.y, b.w, b.h);
+        if (bd.texture && bd.texture.enabled && bd.texture.src) {
+          // Mask the texture to the image's own alpha via an offscreen pass.
+          const W = Math.ceil(b.w), H = Math.ceil(b.h);
+          const off = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(W, H) : Object.assign(document.createElement('canvas'), { width: W, height: H });
+          const o = off.getContext('2d');
+          o.drawImage(img, 0, 0, W, H);
+          drawTexture(o, { ...bd, texture: { ...bd.texture, blend: bd.texture.blend } }, { x: 0, y: 0, w: W, h: H }, () => { o.beginPath(); o.rect(0, 0, W, H); });
+          o.globalCompositeOperation = 'destination-in';
+          o.drawImage(img, 0, 0, W, H);
+          ctx.shadowColor = 'transparent';
+          ctx.drawImage(off, b.x, b.y);
+        }
       } else {
         ctx.strokeStyle = 'rgba(255,255,255,0.4)';
         ctx.setLineDash([8, 8]);
@@ -344,20 +573,24 @@
       return;
     }
     if (bd.type !== 'shape') { ctx.restore(); return; }
-    ctx.fillStyle = fillStyleFor(ctx, bd, b);
+    const rect = (x, y, w, h) => () => { ctx.beginPath(); ctx.rect(x, y, w, h); };
+    const rr = (x, y, w, h, r) => () => roundRectPath(ctx, x, y, w, h, r);
     switch (bd.shape) {
-      case 'rect': ctx.fillRect(b.x, b.y, b.w, b.h); break;
-      case 'rounded': roundRectPath(ctx, b.x, b.y, b.w, b.h, bd.radius); ctx.fill(); break;
-      case 'pill': roundRectPath(ctx, b.x, b.y, b.w, b.h, b.h / 2); ctx.fill(); break;
+      case 'rect': paintFill(ctx, bd, b, rect(b.x, b.y, b.w, b.h)); break;
+      case 'rounded': paintFill(ctx, bd, b, rr(b.x, b.y, b.w, b.h, bd.radius)); break;
+      case 'pill': paintFill(ctx, bd, b, rr(b.x, b.y, b.w, b.h, b.h / 2)); break;
       case 'slant': {
         const s = bd.skew;
-        ctx.beginPath();
-        ctx.moveTo(b.x + s, b.y); ctx.lineTo(b.x + b.w, b.y);
-        ctx.lineTo(b.x + b.w - s, b.y + b.h); ctx.lineTo(b.x, b.y + b.h);
-        ctx.closePath(); ctx.fill(); break;
+        paintFill(ctx, bd, b, () => {
+          ctx.beginPath();
+          ctx.moveTo(b.x + s, b.y); ctx.lineTo(b.x + b.w, b.y);
+          ctx.lineTo(b.x + b.w - s, b.y + b.h); ctx.lineTo(b.x, b.y + b.h);
+          ctx.closePath();
+        });
+        break;
       }
       case 'accent': {
-        roundRectPath(ctx, b.x, b.y, b.w, b.h, bd.radius); ctx.fill();
+        paintFill(ctx, bd, b, rr(b.x, b.y, b.w, b.h, bd.radius));
         ctx.shadowColor = 'transparent';
         ctx.fillStyle = bd.accentColor;
         ctx.save(); roundRectPath(ctx, b.x, b.y, b.w, b.h, bd.radius); ctx.clip();
@@ -366,8 +599,7 @@
       }
       case 'twoTone': {
         const tb = L.titleBox, sb = L.subBox;
-        ctx.fillStyle = fillStyleFor(ctx, bd, tb);
-        roundRectPath(ctx, tb.x, tb.y, tb.w, tb.h, bd.radius); ctx.fill();
+        paintFill(ctx, bd, tb, rr(tb.x, tb.y, tb.w, tb.h, bd.radius));
         if (sb && sb.w > 0) {
           ctx.fillStyle = bd.accentColor;
           roundRectPath(ctx, sb.x, sb.y, sb.w, sb.h, bd.radius); ctx.fill();
@@ -391,7 +623,7 @@
         ctx.fillRect(b.x + b.w - len, b.y + b.h - w, len, w); ctx.fillRect(b.x + b.w - w, b.y + b.h - len, w, len);
         break;
       }
-      default: ctx.fillRect(b.x, b.y, b.w, b.h);
+      default: paintFill(ctx, bd, b, rect(b.x, b.y, b.w, b.h));
     }
     ctx.restore();
   }
@@ -408,19 +640,37 @@
   function drawText(ctx, s, line, ph, L, state) {
     if (line.empty || !ph.visible) return;
     const type = effType(ph);
+    const perUnit = PER_CHAR.has(type) || PER_WORD.has(type);
+    const animators = (s.animators || []).filter((a) => a.enabled !== false);
+    const tr = s.transform || NO_TR;
     const b = { x: line.x, y: line.top, w: line.width, h: line.bottom - line.top || s.size };
     ctx.save();
     if (s.clipToBox) {
+      // The clip follows the backdrop's own keyframed transform.
+      const m = ctx.getTransform();
       const bx = L.box;
-      ctx.beginPath(); ctx.rect(bx.x, bx.y, bx.w, bx.h); ctx.clip();
+      applyLayerTransform(ctx, state.backdrop.transform, bx.x + bx.w / 2, bx.y + bx.h / 2, false);
+      ctx.beginPath(); ctx.rect(bx.x, bx.y, bx.w, bx.h);
+      ctx.setTransform(m);
+      ctx.clip();
     }
     setTextStyle(ctx, s);
-    if (line.extraLs) ctx.letterSpacing = `${(s.letterSpacing || 0) + line.extraLs}px`;
+    const baseLs = (s.letterSpacing || 0) + (line.extraLs || 0) + (tr.tracking || 0);
+    ctx.letterSpacing = `${baseLs}px`;
     ctx.fillStyle = s.color;
     textShadow(ctx, s);
+    applyLayerTransform(ctx, tr, b.x + b.w / 2, b.y + b.h / 2);
+    layerBlur = tr.blur || 0;
 
-    if (PER_CHAR.has(type) || PER_WORD.has(type)) {
-      drawPerUnit(ctx, s, line, ph, type);
+    if (perUnit || animators.length) {
+      if (layerBlur > 0.05) ctx.filter = blurFilter(layerBlur);
+      if (!perUnit) {
+        const r = animParams(type, ph.p, b, s.anim.distance);
+        if (r.maskSelf) { const pad = s.size * 0.25; ctx.beginPath(); ctx.rect(b.x - pad, b.y - pad * 0.5, b.w + pad * 2, b.h + pad); ctx.clip(); }
+        applyParams(ctx, r, s.size);
+      }
+      drawChars(ctx, s, line, ph, perUnit ? type : 'none', animators);
+      layerBlur = 0;
       ctx.restore();
       return;
     }
@@ -432,7 +682,7 @@
     applyParams(ctx, r, s.size);
     if (r.tracking) {
       const extra = r.tracking * s.size * -1; // positive spread at start
-      const ls = (s.letterSpacing || 0) + (line.extraLs || 0) + extra;
+      const ls = baseLs + extra;
       ctx.letterSpacing = `${ls}px`;
       const w = ctx.measureText(line.text).width - ls;
       const anchorX = line.x + line.width / 2 - w / 2;
@@ -440,72 +690,125 @@
     } else {
       ctx.fillText(line.text, line.x, line.baseline);
     }
+    layerBlur = 0;
     ctx.restore();
   }
 
-  function drawPerUnit(ctx, s, line, ph, type) {
+  // Character-by-character drawing: per-letter/word in/out animations and text animators.
+  function drawChars(ctx, s, line, ph, type, animators) {
     const chars = Array.from(line.text);
-    // Build units (characters or words) with x positions.
-    const units = [];
-    if (PER_WORD.has(type)) {
-      const re = /\S+/g; let m;
-      while ((m = re.exec(line.text))) {
-        const pre = line.text.slice(0, m.index);
-        units.push({ text: m[0], x: line.x + (pre ? ctx.measureText(pre).width : 0) });
-      }
-    } else {
-      let pre = '';
-      for (const ch of chars) {
-        units.push({ text: ch, x: line.x + (pre ? ctx.measureText(pre).width : 0) });
-        pre += ch;
-      }
+    const n = chars.length;
+    // x positions (respecting kerning + letter spacing) and word indices
+    const xs = []; let pre = '';
+    const wordIdx = []; let w = -1, inWord = false;
+    for (const ch of chars) {
+      xs.push(line.x + (pre ? ctx.measureText(pre).width : 0));
+      pre += ch;
+      const space = /\s/.test(ch);
+      if (!space && !inWord) w++;
+      inWord = !space;
+      wordIdx.push(Math.max(0, w));
     }
-    const n = units.length;
+    const nWords = w + 1;
+    const h = line.bottom - line.top;
+
+    // In/out per-unit progress
+    const byWord = PER_WORD.has(type);
+    const units = byWord ? nWords : n;
     const stagger = clamp(s.anim.stagger ?? 0.5, 0, 0.98);
-    const span = 1 + stagger * (n - 1);
+    const span = 1 + stagger * (units - 1);
     const anim = ph.anim || s.anim.in;
     const easeFn = ph.ease || getEasing(anim.easing, anim.bezier);
     const isOut = ph.phase === 'out';
-    if (type === 'typewriter') {
-      const p = ph.phase === 'hold' ? 1 : ph.p;
-      const count = Math.floor(p * n + 1e-6);
-      for (let i = 0; i < count; i++) ctx.fillText(units[i].text, units[i].x, line.baseline);
-      return;
-    }
+    const typeCount = type === 'typewriter' ? Math.floor((ph.phase === 'hold' ? 1 : ph.p) * n + 1e-6) : n;
+
+    let trackShift = 0;
     for (let i = 0; i < n; i++) {
-      let p;
-      if (ph.phase === 'hold') p = 1;
-      else {
-        // Out phase: animate letters in the same order they came in.
-        const raw = clamp(ph.raw * span - i * stagger);
+      const ch = chars[i];
+      // Animator amounts
+      let dx = 0, dy = 0, sc = 1, rot = 0, op = 1, blur = 0, color = null, track = 0;
+      for (const a of animators) {
+        const amt = selectorAmount(a, a.unit === 'words' ? wordIdx[i] : i, a.unit === 'words' ? nWords : n);
+        if (amt <= 0) continue;
+        const pr = a.props || {};
+        dx += amt * (pr.x || 0); dy += amt * (pr.y || 0);
+        sc *= 1 + amt * (((pr.scale ?? 100) / 100) - 1);
+        rot += amt * (pr.rotation || 0);
+        op *= 1 + amt * (((pr.opacity ?? 100) / 100) - 1);
+        blur += amt * (pr.blur || 0);
+        track += amt * (pr.tracking || 0);
+        if (pr.colorOn && pr.color) color = lerpValue(color || s.color, pr.color, clamp(amt));
+      }
+      const x = xs[i] + trackShift;
+      trackShift += track;
+      if (i >= typeCount || /\s/.test(ch)) continue;
+
+      let p = 1;
+      if (type !== 'none' && type !== 'typewriter' && ph.phase !== 'hold') {
+        const raw = clamp(ph.raw * span - (byWord ? wordIdx[i] : i) * stagger);
         p = isOut ? 1 - easeFn(raw) : easeFn(raw);
       }
-      if (p <= 0.0001 && type !== 'lettersScale') continue;
-      const u = units[i];
+      if (p <= 0.0001 || op <= 0.001) continue;
+      const cw = ctx.measureText(ch).width;
+      const cx = x + cw / 2, cy = line.top + h / 2;
       ctx.save();
-      const uw = ctx.measureText(u.text).width;
-      const h = line.bottom - line.top;
       switch (type) {
         case 'lettersFade': ctx.globalAlpha *= clamp(p); break;
-        case 'lettersRise': ctx.globalAlpha *= clamp(p * 2); ctx.translate(0, (1 - p) * s.size * 0.6); break;
-        case 'wordsRise': ctx.globalAlpha *= clamp(p * 2); ctx.translate(0, (1 - p) * s.size * 0.6); break;
-        case 'lettersDrop': ctx.globalAlpha *= clamp(p * 2); ctx.translate(0, -(1 - p) * s.size * 0.6); break;
-        case 'lettersScale': {
-          if (p <= 0.0001) { ctx.restore(); continue; }
-          const cx = u.x + uw / 2, cy = line.top + h / 2;
-          ctx.translate(cx, cy); ctx.scale(p, p); ctx.translate(-cx, -cy);
-          break;
-        }
-        case 'lettersBlur': ctx.globalAlpha *= clamp(p); ctx.filter = `blur(${((1 - p) * 12).toFixed(2)}px)`; break;
+        case 'lettersRise': case 'wordsRise': ctx.globalAlpha *= clamp(p * 2); dy += (1 - p) * s.size * 0.6; break;
+        case 'lettersDrop': ctx.globalAlpha *= clamp(p * 2); dy -= (1 - p) * s.size * 0.6; break;
+        case 'lettersScale': sc *= p; break;
+        case 'lettersBlur': ctx.globalAlpha *= clamp(p); blur += (1 - p) * 12; break;
         default: break;
       }
-      ctx.fillText(u.text, u.x, line.baseline);
+      if (op < 1) ctx.globalAlpha *= clamp(op);
+      if (blur + layerBlur > 0.05) ctx.filter = blurFilter(blur + layerBlur);
+      if (color) ctx.fillStyle = color;
+      ctx.translate(dx, dy);
+      if (rot || sc !== 1) {
+        ctx.translate(cx, cy); ctx.rotate((rot * Math.PI) / 180); ctx.scale(Math.max(1e-4, sc), Math.max(1e-4, sc)); ctx.translate(-cx, -cy);
+      }
+      ctx.fillText(ch, x, line.baseline);
       ctx.restore();
     }
   }
 
+  // ---------- Masks ----------
+  let maskCanvas = null;
+  function offscreen(w, h) {
+    if (!maskCanvas) maskCanvas = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(w, h) : Object.assign(document.createElement('canvas'), { width: w, height: h });
+    if (maskCanvas.width !== w || maskCanvas.height !== h) { maskCanvas.width = w; maskCanvas.height = h; }
+    return maskCanvas;
+  }
+  function maskPath(c, m) {
+    c.beginPath();
+    if (m.shape === 'ellipse') c.ellipse(m.x + m.w / 2, m.y + m.h / 2, Math.max(0, m.w / 2), Math.max(0, m.h / 2), 0, 0, Math.PI * 2);
+    else if (m.radius > 0) roundRectPath(c, m.x, m.y, m.w, m.h, m.radius);
+    else c.rect(m.x, m.y, m.w, m.h);
+  }
+  // Draws a layer through its mask (if enabled) using an offscreen buffer.
+  function withMask(ctx, state, layer, draw) {
+    const m = state[layer].mask;
+    if (!m || !m.enabled) return draw(ctx);
+    const { width: W, height: H } = state.comp;
+    const off = offscreen(W, H);
+    const o = off.getContext('2d');
+    o.setTransform(1, 0, 0, 1, 0, 0);
+    o.clearRect(0, 0, W, H);
+    o.save(); draw(o); o.restore();
+    o.save();
+    o.globalCompositeOperation = m.invert ? 'destination-out' : 'destination-in';
+    o.filter = blurFilter(m.feather || 0);
+    o.fillStyle = '#000';
+    maskPath(o, m); o.fill();
+    o.restore();
+    ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1; ctx.drawImage(off, 0, 0); ctx.restore();
+  }
+
   // ---------- Main render ----------
   function render(ctx, state, t, opts = {}) {
+    const base = state;
+    curT = t;
+    state = resolveAt(state, t);
     const { width, height, duration } = state.comp;
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -523,35 +826,114 @@
         const margin = 200;
         const bb = { x: L.box.x, y: L.box.y, w: L.box.w, h: L.box.h };
         const r = animParams(type, ph.p, bb, bd.anim.distance);
-        ctx.save();
-        applyParams(ctx, r, margin);
-        drawBackdrop(ctx, state, L);
-        ctx.restore();
+        withMask(ctx, state, 'backdrop', (c) => {
+          c.save();
+          const tr = bd.transform || NO_TR;
+          applyLayerTransform(c, tr, bb.x + bb.w / 2, bb.y + bb.h / 2);
+          layerBlur = tr.blur || 0;
+          applyParams(c, r, margin);
+          if (layerBlur > 0.05 && !(r.blur > 0.05)) c.filter = blurFilter(layerBlur);
+          drawBackdrop(c, state, L);
+          layerBlur = 0;
+          c.restore();
+        });
       }
     }
     // Text
-    drawText(ctx, state.title, L.title, phaseAt(state.title.anim, t, duration), L, state);
-    drawText(ctx, state.subtitle, L.subtitle, phaseAt(state.subtitle.anim, t, duration), L, state);
+    for (const k of ['title', 'subtitle']) {
+      const ph = phaseAt(state[k].anim, t, duration);
+      if (!ph.visible || L[k].empty) continue;
+      withMask(ctx, state, k, (c) => drawText(c, state[k], L[k], ph, L, state));
+    }
+    void base;
 
     L.layers = layerBounds(state, L);
     if (opts.guides) drawGuides(ctx, state, L, opts);
     return L;
   }
 
+  // ---------- Motion blur (temporal supersampling) ----------
+  // Renders several sub-frames across the shutter interval and averages them in premultiplied
+  // space by drawing each at 1/N alpha with additive ('lighter') compositing.
+  let mbCanvas = null;
+  function renderFrame(ctx, state, t, opts = {}) {
+    const mb = state.comp.motionBlur;
+    const samples = Math.round(opts.samples || (mb && mb.samples) || 8);
+    if (!mb || !mb.enabled || opts.noMotionBlur || samples < 2 || !(mb.shutter > 0)) return render(ctx, state, t, opts);
+    const { width: W, height: H, fps } = state.comp;
+    if (!mbCanvas) mbCanvas = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(W, H) : Object.assign(document.createElement('canvas'), { width: W, height: H });
+    if (mbCanvas.width !== W || mbCanvas.height !== H) { mbCanvas.width = W; mbCanvas.height = H; }
+    const sc = mbCanvas.getContext('2d');
+    const span = (Math.min(720, mb.shutter) / 360) / fps;
+    const sampleT = (i) => Math.max(0, Math.min(state.comp.duration, t - span / 2 + (span * (i + 0.5)) / samples));
+    if (opts.precise) {
+      // Export quality: accumulate in floating point (premultiplied) to avoid banding.
+      const sctx = mbCanvas.getContext('2d', { willReadFrequently: true });
+      const acc = new Float32Array(W * H * 4);
+      for (let i = 0; i < samples; i++) {
+        render(sctx, state, sampleT(i), { guides: false });
+        const d = sctx.getImageData(0, 0, W, H).data;
+        for (let j = 0; j < d.length; j += 4) {
+          const a = d[j + 3];
+          if (!a) continue;
+          acc[j] += d[j] * a; acc[j + 1] += d[j + 1] * a; acc[j + 2] += d[j + 2] * a; acc[j + 3] += a;
+        }
+      }
+      const out = ctx.createImageData(W, H), o = out.data;
+      for (let j = 0; j < o.length; j += 4) {
+        const a = acc[j + 3];
+        if (!a) continue;
+        o[j] = acc[j] / a; o[j + 1] = acc[j + 1] / a; o[j + 2] = acc[j + 2] / a; o[j + 3] = a / samples;
+      }
+      ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.putImageData(out, 0, 0); ctx.restore();
+      const rs0 = resolveAt(state, t); curT = t;
+      const L0 = computeLayout(ctx, rs0); L0.layers = layerBounds(rs0, L0);
+      return L0;
+    }
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = 1 / samples;
+    for (let i = 0; i < samples; i++) {
+      render(sc, state, sampleT(i), { guides: false });
+      ctx.drawImage(mbCanvas, 0, 0);
+    }
+    ctx.restore();
+    // Layout / guides for the centre time (no clearing).
+    const rs = resolveAt(state, t);
+    curT = t;
+    const L = computeLayout(ctx, rs);
+    L.layers = layerBounds(rs, L);
+    if (opts.guides) drawGuides(ctx, rs, L, opts);
+    return L;
+  }
+
   // Untransformed bounds of each layer, used for click-to-select.
   function layerBounds(state, L) {
     const tb = (line, s) => (line.empty ? null : { x: line.x - 4, y: line.top - s.size * 0.12, w: line.width + 8, h: (line.bottom - line.top) + s.size * 0.24 });
-    return {
+    const out = {
       title: tb(L.title, state.title),
       subtitle: tb(L.subtitle, state.subtitle),
       backdrop: state.backdrop.type === 'none' ? null : { ...L.box },
     };
+    for (const k of Object.keys(out)) if (out[k]) out[k].tr = { ...NO_TR, ...(state[k].transform || {}) };
+    return out;
   }
+  // Point-in-layer test that undoes the layer's transform (position, rotation, scale).
   function hitTest(L, x, y) {
     if (!L || !L.layers) return null;
     for (const k of ['title', 'subtitle', 'backdrop']) {
       const b = L.layers[k];
-      if (b && x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) return k;
+      if (!b) continue;
+      const tr = b.tr || NO_TR;
+      const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+      let px = x - (tr.x || 0) - cx, py = y - (tr.y || 0) - cy;
+      const a = -((tr.rotation || 0) * Math.PI) / 180;
+      [px, py] = [px * Math.cos(a) - py * Math.sin(a), px * Math.sin(a) + py * Math.cos(a)];
+      const sc = (tr.scale ?? 100) / 100 || 1e-4;
+      px /= sc; py /= sc;
+      if (Math.abs(px) <= b.w / 2 && Math.abs(py) <= b.h / 2) return k;
     }
     return null;
   }
@@ -588,7 +970,14 @@
     }
     if (opts.selected && L.layers[opts.selected]) {
       const b = L.layers[opts.selected];
+      const m = state[opts.selected].mask;
+      if (m && m.enabled) {
+        ctx.save(); ctx.strokeStyle = '#22d3ee'; ctx.lineWidth = 1.5 * lw; ctx.setLineDash([3 * lw, 3 * lw]);
+        maskPath(ctx, m); ctx.stroke(); ctx.restore();
+      }
       ctx.save();
+      const tr = state[opts.selected].transform;
+      if (tr) applyLayerTransform(ctx, tr, b.x + b.w / 2, b.y + b.h / 2, false);
       ctx.strokeStyle = '#f59e0b'; ctx.lineWidth = 2 * lw; ctx.setLineDash([6 * lw, 4 * lw]);
       ctx.strokeRect(b.x - 3 * lw, b.y - 3 * lw, b.w + 6 * lw, b.h + 6 * lw);
       ctx.setLineDash([]);
@@ -610,8 +999,8 @@
   }
 
   global.Engine = {
-    BACKDROP_ANIMS, TEXT_ANIMS, SHAPES,
-    render, computeLayout, phaseAt, timingSpans, imagesReady, getImage, hitTest,
+    BACKDROP_ANIMS, TEXT_ANIMS, SHAPES, GRADIENT_TYPES, GRADIENT_ANIMS, BLEND_MODES,
+    render, renderFrame, computeLayout, phaseAt, timingSpans, imagesReady, getImage, hitTest, resolveAt, valueAtKeys, selectorAmount,
     set onImageLoad(fn) { onImageLoad = fn; },
   };
 })(typeof window !== 'undefined' ? window : globalThis);

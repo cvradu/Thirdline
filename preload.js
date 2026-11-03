@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('api', {
     list: () => ipcRenderer.invoke('fonts:list'),
     import: () => ipcRenderer.invoke('fonts:import'),
     remove: (file) => ipcRenderer.invoke('fonts:remove', file),
+    installData: (file, data) => ipcRenderer.invoke('fonts:installData', file, data),
+    read: (file) => ipcRenderer.invoke('fonts:read', file),
   },
   exporter: {
     chooseDest: (format, baseName) => ipcRenderer.invoke('export:chooseDest', format, baseName),
@@ -20,6 +22,13 @@ contextBridge.exposeInMainWorld('api', {
     finish: (id) => ipcRenderer.invoke('export:finish', id),
     cancel: (id) => ipcRenderer.invoke('export:cancel', id),
   },
+  project: {
+    save: (filePath, json, suggestedName) => ipcRenderer.invoke('project:save', filePath, json, suggestedName),
+    open: () => ipcRenderer.invoke('project:open'),
+    read: (p) => ipcRenderer.invoke('project:read', p),
+    onOpenPath: (cb) => ipcRenderer.on('project:openPath', (_e, p) => cb(p)),
+  },
+  onMenu: (cb) => ipcRenderer.on('menu', (_e, cmd) => cb(cmd)),
   reveal: (p) => ipcRenderer.invoke('shell:reveal', p),
   info: () => ipcRenderer.invoke('app:info'),
 });

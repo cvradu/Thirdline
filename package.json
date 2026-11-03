@@ -1,6 +1,6 @@
 {
   "name": "thirdline",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Thirdline: design animated lower thirds and export them with alpha (ProRes 4444, WebM, PNG).",
   "main": "main.js",
   "scripts": {
@@ -78,7 +78,16 @@
       },
       "artifactName": "Thirdline-${version}-${arch}.${ext}"
     },
-    "afterPack": "build/after-pack.js"
+    "afterPack": "build/after-pack.js",
+    "fileAssociations": [
+      {
+        "ext": "l3rd",
+        "name": "Thirdline Project",
+        "description": "Thirdline lower-third project",
+        "role": "Editor",
+        "icon": "build/icon.png"
+      }
+    ]
   },
   "repository": {
     "type": "git",

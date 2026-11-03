@@ -43,6 +43,13 @@
         remove: async () => true,
       },
       exporter: null,
+      project: {
+        save: async (_p, json, name) => { download(`${name || 'Untitled'}.l3rd`, new Blob([json], { type: 'application/json' })); return `${name || 'Untitled'}.l3rd`; },
+        open: () => pickFile('.l3rd,.json').then(async (f) => (f ? { path: f.name, text: await f.text() } : null)),
+        read: async () => null,
+        onOpenPath: () => {},
+      },
+      onMenu: () => {},
       reveal: async () => {},
       info: async () => ({ platform: 'browser' }),
     };
@@ -84,7 +91,7 @@
       const face = new FontFace(f.family, f.data);
       await face.load();
       document.fonts.add(face);
-      userFonts.push({ family: f.family, file: f.file });
+      userFonts.push({ family: f.family, file: f.file, data: f.data });
     } catch (e) {
       toast(`Could not load font ${f.file}: ${e.message}`);
       return null;
@@ -108,10 +115,12 @@
     refreshVisibility();
     ensureFonts().then(drawPreview);
     drawPreview();
-    drawTimeline();
+    resizeTimeline();
+    updateKeyBar();
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => { try { localStorage.setItem('l3rd:last', JSON.stringify(state)); } catch {} }, 400);
     if (record) {
+      setDirty(true);
       clearTimeout(histTimer);
       histTimer = setTimeout(pushHistory, 350);
     }
@@ -127,6 +136,67 @@
   function undo() { clearTimeout(histTimer); pushHistory(); if (histIndex > 0) { state = JSON.parse(history[--histIndex]); changed({ sync: true, record: false }); } }
   function redo() { if (histIndex < history.length - 1) { state = JSON.parse(history[++histIndex]); changed({ sync: true, record: false }); } }
   function replaceState(next) { state = Presets.normalize(next); changed({ sync: true }); setTime(Math.min(time, state.comp.duration)); }
+
+  // ---------- Keyframes ----------
+  const LAYER_NAMES = { backdrop: 'Backdrop', title: 'Title', subtitle: 'Subtitle', layout: 'Position', comp: 'Canvas' };
+  const keyLabels = {};
+  let selKey = null; // { path, k } (k = keyframe object)
+  const fpsT = (t) => Math.round(t * state.comp.fps) / state.comp.fps;
+  const keysOf = (path) => (state.keys && state.keys[path]) || null;
+  const isKeyed = (path) => !!(keysOf(path) && keysOf(path).length);
+  const keyIndexAt = (path, t) => (keysOf(path) || []).findIndex((k) => Math.abs(k.t - t) < 0.5 / state.comp.fps);
+  function valueNow(path) { return isKeyed(path) ? Engine.valueAtKeys(keysOf(path), time) : getPath(state, path); }
+  function sortKeys(path) { keysOf(path)?.sort((a, b) => a.t - b.t); }
+  function setKey(path, t, v) {
+    state.keys ??= {};
+    const ks = (state.keys[path] ??= []);
+    const i = keyIndexAt(path, t);
+    if (i >= 0) ks[i].v = v; else ks.push({ t: fpsT(t), v, e: 'easeInOutCubic' });
+    sortKeys(path);
+  }
+  function removeKey(path, k) {
+    const ks = keysOf(path); if (!ks) return;
+    const v = Engine.valueAtKeys(ks, k.t);
+    ks.splice(ks.indexOf(k), 1);
+    if (!ks.length) { delete state.keys[path]; setPath(state, path, v); }
+    if (selKey && selKey.k === k) selKey = null;
+  }
+  // Writes a value, keyframing it at the playhead if that property is animated.
+  function setValue(path, v) {
+    if (isKeyed(path)) setKey(path, time, v); else setPath(state, path, v);
+  }
+  function toggleKey(path) {
+    if (!isKeyed(path)) { setKey(path, time, getPath(state, path)); toast(`Keyframe added · ${keyLabels[path] || path}`); }
+    else {
+      const i = keyIndexAt(path, time);
+      if (i >= 0) removeKey(path, keysOf(path)[i]);
+      else setKey(path, time, valueNow(path));
+    }
+    changed({ sync: true });
+  }
+  function clearKeys(prefix) {
+    for (const p of Object.keys(state.keys || {})) if (p.startsWith(prefix)) { const v = valueNow(p); delete state.keys[p]; setPath(state, p, v); }
+    selKey = null;
+  }
+  let advanced = false;
+  try { advanced = localStorage.getItem('thirdline:advanced') === '1'; } catch {}
+  function setAdvanced(on) {
+    advanced = on; document.body.classList.toggle('advanced', on);
+    $('#optAdvanced').checked = on;
+    try { localStorage.setItem('thirdline:advanced', on ? '1' : '0'); } catch {}
+    resizeTimeline();
+  }
+
+  // Recently used colours (shared by every colour control)
+  let recentColors = [];
+  try { recentColors = JSON.parse(localStorage.getItem('thirdline:recentColors')) || []; } catch {}
+  const recentSwatchSets = [];
+  function rememberColor(c) {
+    if (!/^#[0-9a-f]{6}$/i.test(c)) return;
+    recentColors = [c, ...recentColors.filter((x) => x.toLowerCase() !== c.toLowerCase())].slice(0, 12);
+    try { localStorage.setItem('thirdline:recentColors', JSON.stringify(recentColors)); } catch {}
+    recentSwatchSets.forEach((f) => f());
+  }
 
   // ---------- Generic control rows ----------
   const controls = []; // {sync(), def, rowEl}
@@ -147,10 +217,16 @@
 
   function row(def) {
     const ctl = el('div', { class: 'ctl' });
-    const r = el('div', { class: 'row' }, el('label', {}, def.label), ctl);
+    let kf = null;
+    if (def.key) {
+      const layer = def.path.split('.')[0];
+      keyLabels[def.path] = `${LAYER_NAMES[layer] || layer} · ${def.keyLabel || def.label}`;
+      kf = el('button', { type: 'button', class: 'kf', title: 'Keyframe: add/remove a keyframe at the playhead', onclick: () => toggleKey(def.path) });
+    }
+    const r = el('div', { class: 'row' + (def.key ? ' keyable' : '') }, el('label', {}, kf, def.label), ctl);
     let sync = () => {};
-    const val = () => getPath(state, def.path);
-    const set = (v) => { setPath(state, def.path, v); def.onSet?.(v); changed(); };
+    const val = () => (def.key ? valueNow(def.path) : getPath(state, def.path));
+    const set = (v) => { if (def.key) setValue(def.path, v); else setPath(state, def.path, v); def.onSet?.(v); changed(); };
     switch (def.type) {
       case 'text': {
         const i = el('input', { type: 'text', placeholder: def.placeholder || '' });
@@ -184,7 +260,20 @@
         for (const c of ['#ffffff', '#111827', '#0f172a', '#f59e0b', '#ef4444', '#22c55e', '#3b82f6', '#a855f7', '#ec4899', '#22d3ee', '#d4af37', '#cbd5e1']) {
           sw.append(el('span', { style: `background:${c}`, title: c, onclick: () => { i.value = c; hex.value = c; set(c); } }));
         }
-        const wrap = el('div', { style: 'flex:1' }, el('div', { class: 'ctl' }, i, hex), def.swatches === false ? null : sw);
+        const tools = [];
+        if (window.EyeDropper) {
+          tools.push(el('button', { type: 'button', class: 'eyedrop', title: 'Pick a colour from anywhere on screen', onclick: async () => {
+            try { const r = await new window.EyeDropper().open(); i.value = r.sRGBHex.slice(0, 7); hex.value = i.value; set(i.value); rememberColor(i.value); } catch {}
+          } }, '⌖'));
+        }
+        i.addEventListener('change', () => rememberColor(i.value));
+        const recent = el('div', { class: 'swatches recent', title: 'Recent colours' });
+        recentSwatchSets.push(() => {
+          recent.innerHTML = '';
+          for (const c of recentColors) recent.append(el('span', { style: `background:${c}`, title: c, onclick: () => { i.value = c; hex.value = c; set(c); } }));
+        });
+        recentSwatchSets[recentSwatchSets.length - 1]();
+        const wrap = el('div', { style: 'flex:1' }, el('div', { class: 'ctl' }, i, hex, ...tools), def.swatches === false ? null : sw, def.swatches === false ? null : recent);
         ctl.append(wrap);
         sync = () => { i.value = val() || '#000000'; if (document.activeElement !== hex) hex.value = val() || ''; };
         break;
@@ -214,6 +303,15 @@
         break;
       }
     }
+    if (kf) {
+      const inner = sync;
+      sync = () => {
+        inner();
+        const keyed = isKeyed(def.path);
+        kf.classList.toggle('animated', keyed);
+        kf.classList.toggle('onkey', keyed && keyIndexAt(def.path, time) >= 0);
+      };
+    }
     const entry = { sync, def, rowEl: r };
     controls.push(entry);
     sync();
@@ -223,6 +321,7 @@
     return el('div', { class: 'section' }, el('h3', {}, title, headerExtra || null), ...rows);
   }
   function syncControls() { for (const c of controls) c.sync(); }
+  function syncKeyable() { for (const c of controls) if (c.def.key) c.sync(); }
   function refreshVisibility() {
     for (const c of controls) if (c.def.show) c.rowEl.classList.toggle('hidden', !c.def.show(state));
   }
@@ -280,16 +379,16 @@
         onSet: () => { const ws = BUILTIN_FONTS[state[key].font]; if (ws && !ws.includes(+state[key].weight)) state[key].weight = ws.reduce((a, b) => (Math.abs(b - state[key].weight) < Math.abs(a - state[key].weight) ? b : a)); syncControls(); },
         extra: () => [el('button', { type: 'button', title: 'Upload a .ttf/.otf/.woff font', onclick: () => uploadFont(key) }, 'Upload…')] }),
       row({ label: 'Weight', type: 'select', path: p('weight'), options: weightOptions(key), numeric: true }),
-      row({ label: 'Size', type: 'range', path: p('size'), min: 8, max: 220, unit: 'px' }),
-      row({ label: 'Color', type: 'color', path: p('color') }),
-      row({ label: 'Letter spacing', type: 'range', path: p('letterSpacing'), min: -10, max: 40, step: 0.5, unit: 'px' }),
+      row({ label: 'Size', type: 'range', path: p('size'), key: true, min: 8, max: 220, unit: 'px' }),
+      row({ label: 'Color', type: 'color', path: p('color'), key: true }),
+      row({ label: 'Letter spacing', type: 'range', path: p('letterSpacing'), key: true, min: -10, max: 40, step: 0.5, unit: 'px' }),
       row({ label: 'Style', type: 'checkbox', path: p('uppercase'), text: 'UPPERCASE' }),
       row({ label: '', type: 'checkbox', path: p('italic'), text: 'Italic' }),
       row({ label: 'Mask to box', type: 'checkbox', path: p('clipToBox'), text: 'Clip text to backdrop' }),
       row({ label: 'Text shadow', type: 'checkbox', path: p('shadow.on'), text: 'On' }),
-      row({ label: 'Shadow color', type: 'color', path: p('shadow.color'), swatches: false, show: (s) => s[key].shadow.on }),
-      row({ label: 'Shadow opacity', type: 'range', path: p('shadow.opacity'), min: 0, max: 100, scale: 100, unit: '%', show: (s) => s[key].shadow.on }),
-      row({ label: 'Shadow blur', type: 'range', path: p('shadow.blur'), min: 0, max: 60, show: (s) => s[key].shadow.on }),
+      row({ label: 'Shadow color', type: 'color', path: p('shadow.color'), key: true, swatches: false, show: (s) => s[key].shadow.on }),
+      row({ label: 'Shadow opacity', type: 'range', path: p('shadow.opacity'), key: true, min: 0, max: 100, scale: 100, unit: '%', show: (s) => s[key].shadow.on }),
+      row({ label: 'Shadow blur', type: 'range', path: p('shadow.blur'), key: true, min: 0, max: 60, show: (s) => s[key].shadow.on }),
       row({ label: 'Shadow Y', type: 'range', path: p('shadow.offsetY'), min: -30, max: 30, show: (s) => s[key].shadow.on }),
     ]);
   }
@@ -298,6 +397,62 @@
   const shapeIn = (...names) => (s) => isShape(s) && names.includes(s.backdrop.shape);
   const usesAccent = shapeIn('accent', 'twoTone', 'underline', 'sideBar', 'corners');
   const usesFill = (s) => isShape(s) && !['underline', 'sideBar', 'corners'].includes(s.backdrop.shape);
+  const ft = (s) => s.backdrop.fillType || (s.backdrop.gradient ? 'linear' : 'solid');
+
+  // Built-in procedural textures (generated once, stored as PNG data URLs)
+  const BUILTIN_TEXTURES = {
+    grain: ['Film grain', (g, W, H) => { const d = g.createImageData(W, H); for (let i = 0; i < d.data.length; i += 4) { const v = 128 + (Math.random() - 0.5) * 160; d.data[i] = d.data[i + 1] = d.data[i + 2] = v; d.data[i + 3] = 255; } g.putImageData(d, 0, 0); }],
+    paper: ['Paper fibres', (g, W, H) => { g.fillStyle = '#808080'; g.fillRect(0, 0, W, H); for (let i = 0; i < 1600; i++) { g.strokeStyle = `rgba(${Math.random() < 0.5 ? '255,255,255' : '0,0,0'},${Math.random() * 0.18})`; g.lineWidth = Math.random() * 1.5; const x = Math.random() * W, y = Math.random() * H, a = Math.random() * Math.PI, l = 4 + Math.random() * 18; g.beginPath(); g.moveTo(x, y); g.lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l); g.stroke(); } }],
+    scanlines: ['Scanlines', (g, W, H) => { g.fillStyle = '#ffffff'; g.fillRect(0, 0, W, H); g.fillStyle = '#000000'; for (let y = 0; y < H; y += 4) g.fillRect(0, y, W, 2); }],
+    halftone: ['Halftone dots', (g, W, H) => { g.fillStyle = '#ffffff'; g.fillRect(0, 0, W, H); g.fillStyle = '#000000'; for (let y = 0; y < H; y += 10) for (let x = (y / 10) % 2 ? 5 : 0; x < W; x += 10) { const r = 1 + 3.2 * (x / W); g.beginPath(); g.arc(x, y, r, 0, 7); g.fill(); } }],
+    stripes: ['Diagonal stripes', (g, W, H) => { g.fillStyle = '#808080'; g.fillRect(0, 0, W, H); g.strokeStyle = '#ffffff'; g.lineWidth = 6; for (let i = -H; i < W + H; i += 18) { g.beginPath(); g.moveTo(i, 0); g.lineTo(i + H, H); g.stroke(); } }],
+    brushed: ['Brushed metal', (g, W, H) => { const d = g.createImageData(W, H); for (let y = 0; y < H; y++) { let v = 128; for (let x = 0; x < W; x++) { v += (Math.random() - 0.5) * 18; v = v * 0.96 + 128 * 0.04; const i = (y * W + x) * 4; d.data[i] = d.data[i + 1] = d.data[i + 2] = v + (Math.random() - 0.5) * 20; d.data[i + 3] = 255; } } g.putImageData(d, 0, 0); }],
+  };
+  function builtinTexture(key) {
+    const c = document.createElement('canvas'); c.width = 256; c.height = 256;
+    BUILTIN_TEXTURES[key][1](c.getContext('2d'), 256, 256);
+    return c.toDataURL('image/png');
+  }
+  function textureSection() {
+    const tx = 'backdrop.texture';
+    const has = (s) => s.backdrop.type !== 'none' && !!s.backdrop.texture.src;
+    const input = el('input', { type: 'file', accept: 'image/*', hidden: true });
+    input.addEventListener('change', () => {
+      const f = input.files[0]; if (!f) return;
+      const rd = new FileReader();
+      rd.onload = () => { Object.assign(state.backdrop.texture, { src: rd.result, name: f.name, enabled: true }); changed({ sync: true }); };
+      rd.readAsDataURL(f); input.value = '';
+    });
+    return section('Texture overlay', [
+      el('div', { class: 'sub' }, 'An image blended on top of the backdrop and clipped to its shape (works with shapes, gradients and image backdrops).'),
+      row({ label: 'Texture', type: 'custom', show: (s) => s.backdrop.type !== 'none', render: (ctl) => {
+        const thumb = el('img', { class: 'thumb', alt: '' });
+        const name = el('span', { class: 'sub' });
+        const pick = el('select');
+        fillSelect(pick, [['', 'Built-in…'], ...Object.entries(BUILTIN_TEXTURES).map(([k, v]) => [k, v[0]])]);
+        pick.addEventListener('change', () => {
+          if (!pick.value) return;
+          Object.assign(state.backdrop.texture, { src: builtinTexture(pick.value), name: BUILTIN_TEXTURES[pick.value][0], enabled: true, fit: 'tile' });
+          pick.value = ''; changed({ sync: true });
+        });
+        ctl.append(el('div', { style: 'flex:1;min-width:0' },
+          el('div', { class: 'btnrow' },
+            el('button', { type: 'button', onclick: () => input.click() }, 'Upload…'), pick,
+            el('button', { type: 'button', onclick: () => { Object.assign(state.backdrop.texture, { src: '', name: '', enabled: false }); changed({ sync: true }); } }, 'Clear')),
+          thumb, name), input);
+        return () => { const t = state.backdrop.texture; thumb.src = t.src || ''; thumb.hidden = !t.src; name.textContent = t.name || 'No texture'; };
+      } }),
+      row({ label: 'Show', type: 'checkbox', path: `${tx}.enabled`, text: 'Texture on', show: has }),
+      row({ label: 'Blend mode', type: 'select', path: `${tx}.blend`, options: Engine.BLEND_MODES, show: has }),
+      row({ label: 'Opacity', type: 'range', path: `${tx}.opacity`, key: true, keyLabel: 'Texture opacity', min: 0, max: 100, scale: 100, unit: '%', show: has }),
+      row({ label: 'Fit', type: 'select', path: `${tx}.fit`, options: { cover: 'Cover the backdrop', tile: 'Tile (repeat)', stretch: 'Stretch' }, show: has }),
+      row({ label: 'Scale', type: 'range', path: `${tx}.scale`, key: true, keyLabel: 'Texture scale', min: 0.1, max: 4, step: 0.01, show: has }),
+      row({ label: 'Offset X', type: 'range', path: `${tx}.offsetX`, key: true, keyLabel: 'Texture offset X', min: -1000, max: 1000, unit: 'px', show: has }),
+      row({ label: 'Offset Y', type: 'range', path: `${tx}.offsetY`, key: true, keyLabel: 'Texture offset Y', min: -1000, max: 1000, unit: 'px', show: has }),
+      row({ label: 'Drift X', type: 'range', path: `${tx}.driftX`, min: -400, max: 400, unit: 'px/s', show: has }),
+      row({ label: 'Drift Y', type: 'range', path: `${tx}.driftY`, min: -400, max: 400, unit: 'px/s', show: has }),
+    ]);
+  }
 
   function backdropPanel() {
     const imgThumb = el('img', { class: 'thumb', alt: '' });
@@ -318,16 +473,43 @@
       section('Backdrop', [
         row({ label: 'Type', type: 'select', path: 'backdrop.type', options: { shape: 'Shape', image: 'Image', none: 'None (text only)' } }),
         row({ label: 'Shape', type: 'select', path: 'backdrop.shape', options: SHAPES, show: isShape }),
-        row({ label: 'Fill', type: 'color', path: 'backdrop.fill', show: usesFill }),
-        row({ label: 'Gradient', type: 'checkbox', path: 'backdrop.gradient', text: 'Use gradient', show: usesFill }),
-        row({ label: 'Fill 2', type: 'color', path: 'backdrop.fill2', show: (s) => usesFill(s) && s.backdrop.gradient }),
-        row({ label: 'Angle', type: 'range', path: 'backdrop.gradientAngle', min: 0, max: 360, unit: '°', show: (s) => usesFill(s) && s.backdrop.gradient }),
-        row({ label: 'Accent', type: 'color', path: 'backdrop.accentColor', show: usesAccent }),
-        row({ label: 'Accent size', type: 'range', path: 'backdrop.accentWidth', min: 1, max: 60, unit: 'px', show: shapeIn('accent', 'underline', 'sideBar', 'corners') }),
+        row({ label: 'Fill', type: 'select', path: 'backdrop.fillType', options: Engine.GRADIENT_TYPES, show: usesFill }),
+        row({ label: 'Colour', type: 'color', path: 'backdrop.fill', key: true, show: (s) => usesFill(s) && ft(s) === 'solid' }),
+        row({ label: 'Gradient look', type: 'custom', show: (s) => usesFill(s) && ft(s) !== 'solid', render: (ctl) => {
+          const sel = el('select');
+          fillSelect(sel, [['', 'Apply a sample…'], ...Presets.GRADIENTS.map((g, i) => [String(i), g.name])]);
+          sel.addEventListener('change', () => {
+            if (sel.value === '') return;
+            Object.assign(state.backdrop, Presets.GRADIENTS[+sel.value].patch);
+            for (const k of ['fill', 'fill2', 'fill3', 'fill4', 'gradientAngle']) if (isKeyed(`backdrop.${k}`)) clearKeys(`backdrop.${k}`);
+            sel.value = ''; changed({ sync: true });
+          });
+          ctl.append(sel);
+        } }),
+        row({ label: 'Colour 1', type: 'color', path: 'backdrop.fill', key: true, keyLabel: 'Gradient colour 1', show: (s) => usesFill(s) && ft(s) !== 'solid' && ft(s) !== 'fourPoint' }),
+        row({ label: 'Colour 2', type: 'color', path: 'backdrop.fill2', key: true, keyLabel: 'Gradient colour 2', show: (s) => usesFill(s) && ft(s) !== 'solid' && ft(s) !== 'fourPoint' }),
+        row({ label: 'Top left', type: 'color', path: 'backdrop.fill', key: true, keyLabel: 'Corner colour TL', show: (s) => usesFill(s) && ft(s) === 'fourPoint' }),
+        row({ label: 'Top right', type: 'color', path: 'backdrop.fill2', key: true, keyLabel: 'Corner colour TR', show: (s) => usesFill(s) && ft(s) === 'fourPoint' }),
+        row({ label: 'Bottom right', type: 'color', path: 'backdrop.fill3', key: true, keyLabel: 'Corner colour BR', show: (s) => usesFill(s) && ft(s) === 'fourPoint' }),
+        row({ label: 'Bottom left', type: 'color', path: 'backdrop.fill4', key: true, keyLabel: 'Corner colour BL', show: (s) => usesFill(s) && ft(s) === 'fourPoint' }),
+        row({ label: 'Angle', type: 'range', path: 'backdrop.gradientAngle', key: true, min: 0, max: 360, unit: '°', show: (s) => usesFill(s) && ft(s) === 'linear' }),
+        row({ label: 'Center X', type: 'range', path: 'backdrop.gradCX', key: true, min: -50, max: 150, unit: '%', show: (s) => usesFill(s) && ft(s) === 'radial' }),
+        row({ label: 'Center Y', type: 'range', path: 'backdrop.gradCY', key: true, min: -50, max: 150, unit: '%', show: (s) => usesFill(s) && ft(s) === 'radial' }),
+        row({ label: 'Radius', type: 'range', path: 'backdrop.gradRadius', key: true, min: 5, max: 300, unit: '%', show: (s) => usesFill(s) && ft(s) === 'radial' }),
+        row({ label: 'Animate', type: 'select', path: 'backdrop.gradAnim', show: (s) => usesFill(s) && ft(s) !== 'solid', options: () => {
+          const t = ft(state);
+          const ok = { linear: ['rotate', 'slide'], radial: ['pulse', 'orbit'], fourPoint: ['swirl', 'breathe'] }[t] || [];
+          return Object.entries(Engine.GRADIENT_ANIMS).filter(([k]) => k === 'none' || k === 'shimmer' || ok.includes(k) || k === state.backdrop.gradAnim);
+        } }),
+        row({ label: 'Loop length', type: 'range', path: 'backdrop.gradSpeed', min: 0.5, max: 20, step: 0.1, unit: 's', show: (s) => usesFill(s) && ft(s) !== 'solid' && s.backdrop.gradAnim !== 'none' }),
+        row({ label: 'Shimmer colour', type: 'color', path: 'backdrop.shimmerColor', swatches: false, show: (s) => usesFill(s) && ft(s) !== 'solid' && s.backdrop.gradAnim === 'shimmer' }),
+        row({ label: 'Shimmer strength', type: 'range', path: 'backdrop.shimmerOpacity', min: 0, max: 100, scale: 100, unit: '%', show: (s) => usesFill(s) && ft(s) !== 'solid' && s.backdrop.gradAnim === 'shimmer' }),
+        row({ label: 'Accent', type: 'color', path: 'backdrop.accentColor', key: true, show: usesAccent }),
+        row({ label: 'Accent size', type: 'range', path: 'backdrop.accentWidth', key: true, min: 1, max: 60, unit: 'px', show: shapeIn('accent', 'underline', 'sideBar', 'corners') }),
         row({ label: 'Accent gap', type: 'range', path: 'backdrop.accentGap', min: 0, max: 80, unit: 'px', show: shapeIn('accent', 'underline', 'sideBar') }),
-        row({ label: 'Opacity', type: 'range', path: 'backdrop.opacity', min: 0, max: 100, scale: 100, unit: '%', show: (s) => s.backdrop.type !== 'none' }),
-        row({ label: 'Corner radius', type: 'range', path: 'backdrop.radius', min: 0, max: 80, unit: 'px', show: shapeIn('rounded', 'accent', 'twoTone') }),
-        row({ label: 'Slant', type: 'range', path: 'backdrop.skew', min: 0, max: 120, unit: 'px', show: shapeIn('slant') }),
+        row({ label: 'Opacity', type: 'range', path: 'backdrop.opacity', key: true, min: 0, max: 100, scale: 100, unit: '%', show: (s) => s.backdrop.type !== 'none' }),
+        row({ label: 'Corner radius', type: 'range', path: 'backdrop.radius', key: true, min: 0, max: 80, unit: 'px', show: shapeIn('rounded', 'accent', 'twoTone') }),
+        row({ label: 'Slant', type: 'range', path: 'backdrop.skew', key: true, min: 0, max: 120, unit: 'px', show: shapeIn('slant') }),
       ]),
       section('Image backdrop', [
         row({ label: 'Image', type: 'custom', render: (ctl) => {
@@ -340,24 +522,25 @@
           return () => { const src = state.backdrop.image.src; imgThumb.src = src || ''; imgThumb.hidden = !src; name.textContent = state.backdrop.image.name || 'PNG with transparency works best.'; };
         } }),
         row({ label: 'Fit', type: 'select', path: 'backdrop.image.fit', options: { box: 'Stretch to text box', natural: 'Natural size (scaled)' }, show: (s) => s.backdrop.type === 'image' }),
-        row({ label: 'Scale', type: 'range', path: 'backdrop.image.scale', min: 0.05, max: 4, step: 0.01, show: (s) => s.backdrop.type === 'image' && s.backdrop.image.fit === 'natural' }),
-        row({ label: 'Text offset X', type: 'range', path: 'backdrop.image.textOffsetX', min: -400, max: 400, unit: 'px', show: (s) => s.backdrop.type === 'image' }),
-        row({ label: 'Text offset Y', type: 'range', path: 'backdrop.image.textOffsetY', min: -300, max: 300, unit: 'px', show: (s) => s.backdrop.type === 'image' }),
+        row({ label: 'Scale', type: 'range', path: 'backdrop.image.scale', key: true, min: 0.05, max: 4, step: 0.01, show: (s) => s.backdrop.type === 'image' && s.backdrop.image.fit === 'natural' }),
+        row({ label: 'Text offset X', type: 'range', path: 'backdrop.image.textOffsetX', key: true, min: -400, max: 400, unit: 'px', show: (s) => s.backdrop.type === 'image' }),
+        row({ label: 'Text offset Y', type: 'range', path: 'backdrop.image.textOffsetY', key: true, min: -300, max: 300, unit: 'px', show: (s) => s.backdrop.type === 'image' }),
       ]),
+      textureSection(),
       section('Size & padding', [
-        row({ label: 'Padding X', type: 'range', path: 'backdrop.padX', min: 0, max: 200, unit: 'px' }),
-        row({ label: 'Padding Y', type: 'range', path: 'backdrop.padY', min: 0, max: 120, unit: 'px' }),
-        row({ label: 'Min width', type: 'range', path: 'backdrop.minWidth', min: 0, max: 1920, unit: 'px' }),
-        row({ label: 'Fixed width', type: 'range', path: 'backdrop.fixedWidth', min: 0, max: 1920, unit: 'px' }),
+        row({ label: 'Padding X', type: 'range', path: 'backdrop.padX', key: true, min: 0, max: 200, unit: 'px' }),
+        row({ label: 'Padding Y', type: 'range', path: 'backdrop.padY', key: true, min: 0, max: 120, unit: 'px' }),
+        row({ label: 'Min width', type: 'range', path: 'backdrop.minWidth', key: true, min: 0, max: 1920, unit: 'px' }),
+        row({ label: 'Fixed width', type: 'range', path: 'backdrop.fixedWidth', key: true, min: 0, max: 1920, unit: 'px' }),
         el('div', { class: 'sub' }, 'Fixed width 0 = size to the text automatically.'),
       ]),
       section('Backdrop shadow', [
         row({ label: 'Shadow', type: 'checkbox', path: 'backdrop.shadow.on', text: 'On', show: (s) => s.backdrop.type !== 'none' }),
-        row({ label: 'Color', type: 'color', path: 'backdrop.shadow.color', swatches: false, show: (s) => s.backdrop.shadow.on }),
-        row({ label: 'Opacity', type: 'range', path: 'backdrop.shadow.opacity', min: 0, max: 100, scale: 100, unit: '%', show: (s) => s.backdrop.shadow.on }),
-        row({ label: 'Blur', type: 'range', path: 'backdrop.shadow.blur', min: 0, max: 100, show: (s) => s.backdrop.shadow.on }),
-        row({ label: 'Offset X', type: 'range', path: 'backdrop.shadow.offsetX', min: -50, max: 50, show: (s) => s.backdrop.shadow.on }),
-        row({ label: 'Offset Y', type: 'range', path: 'backdrop.shadow.offsetY', min: -50, max: 50, show: (s) => s.backdrop.shadow.on }),
+        row({ label: 'Color', type: 'color', path: 'backdrop.shadow.color', key: true, swatches: false, show: (s) => s.backdrop.shadow.on }),
+        row({ label: 'Opacity', type: 'range', path: 'backdrop.shadow.opacity', key: true, min: 0, max: 100, scale: 100, unit: '%', show: (s) => s.backdrop.shadow.on }),
+        row({ label: 'Blur', type: 'range', path: 'backdrop.shadow.blur', key: true, min: 0, max: 100, show: (s) => s.backdrop.shadow.on }),
+        row({ label: 'Offset X', type: 'range', path: 'backdrop.shadow.offsetX', key: true, min: -50, max: 50, show: (s) => s.backdrop.shadow.on }),
+        row({ label: 'Offset Y', type: 'range', path: 'backdrop.shadow.offsetY', key: true, min: -50, max: 50, show: (s) => s.backdrop.shadow.on }),
       ]),
     ];
   }
@@ -403,6 +586,11 @@
           return () => { const k = `${state.comp.width}x${state.comp.height}`; if (!RESOLUTIONS[k]) fillSelect(s, { ...RESOLUTIONS, [k]: k.replace('x', ' × ') }); s.value = k; };
         } }),
         row({ label: 'Frame rate', type: 'select', path: 'comp.fps', numeric: true, options: { 23.976: '23.976', 24: '24', 25: '25', 29.97: '29.97', 30: '30', 50: '50', 59.94: '59.94', 60: '60' } }),
+        row({ label: 'Motion blur', type: 'checkbox', path: 'comp.motionBlur.enabled', text: 'On (applied when exporting)' }),
+        row({ label: 'Shutter angle', type: 'range', path: 'comp.motionBlur.shutter', min: 15, max: 720, step: 15, unit: '°', show: (s) => s.comp.motionBlur.enabled }),
+        row({ label: 'Quality', type: 'select', path: 'comp.motionBlur.samples', numeric: true, options: { 4: 'Draft (4 samples)', 8: 'Good (8)', 12: 'High (12)', 16: 'Very high (16)', 24: 'Best (24, slow)' }, show: (s) => s.comp.motionBlur.enabled }),
+        row({ label: 'Preview', type: 'checkbox', path: 'comp.motionBlur.preview', text: 'Show motion blur in the preview', show: (s) => s.comp.motionBlur.enabled }),
+        el('div', { class: 'sub' }, '180° matches a normal film camera. Higher angles give longer smears.'),
         row({ label: 'Duration', type: 'range', path: 'comp.duration', min: 1, max: 30, step: 0.1, unit: 's', onSet: () => setTime(Math.min(time, state.comp.duration)) }),
       ]),
       section('Position', [
@@ -413,12 +601,12 @@
           ['↖ Top L', () => placeAt('tl'), 'Top-left'],
           ['↗ Top R', () => placeAt('tr'), 'Top-right'],
         ] }),
-        row({ label: 'X', type: 'number', path: 'layout.x', unit: 'px' }),
-        row({ label: 'Y', type: 'number', path: 'layout.y', unit: 'px' }),
+        row({ label: 'X', type: 'number', path: 'layout.x', key: true, unit: 'px' }),
+        row({ label: 'Y', type: 'number', path: 'layout.y', key: true, unit: 'px' }),
         row({ label: 'Anchor X', type: 'select', path: 'layout.hAnchor', options: { left: 'Left edge', center: 'Center', right: 'Right edge' } }),
         row({ label: 'Anchor Y', type: 'select', path: 'layout.vAnchor', options: { top: 'Top edge', bottom: 'Bottom edge (grows up)' } }),
         row({ label: 'Text align', type: 'select', path: 'layout.align', options: { left: 'Left', center: 'Center', right: 'Right', justify: 'Justified' } }),
-        row({ label: 'Line gap', type: 'range', path: 'layout.lineGap', min: -20, max: 80, unit: 'px' }),
+        row({ label: 'Line gap', type: 'range', path: 'layout.lineGap', key: true, min: -20, max: 80, unit: 'px' }),
         el('div', { class: 'sub' }, 'Tip: drag in the preview to move. It snaps to the title-safe edges.'),
       ]),
     ];
@@ -494,7 +682,24 @@
     const base = `${key}.anim`;
     const name = { backdrop: 'Backdrop', title: 'Title', subtitle: 'Subtitle' }[key];
     const perUnit = (dir) => (s) => /^(letters|words)/.test(s[key].anim[dir].type);
+    const tp = (k) => `${key}.transform.${k}`;
+    const transformSec = section(`${name} · Transform`, [
+      el('div', { class: 'sub' }, 'Click ◆ to start animating a property, then move the playhead and change the value: a keyframe is added automatically. With a layer selected you can also drag it in the preview.'),
+      row({ label: 'Position X', type: 'range', path: tp('x'), key: true, min: -1920, max: 1920, unit: 'px' }),
+      row({ label: 'Position Y', type: 'range', path: tp('y'), key: true, min: -1080, max: 1080, unit: 'px' }),
+      row({ label: 'Scale', type: 'range', path: tp('scale'), key: true, min: 0, max: 400, unit: '%' }),
+      row({ label: 'Rotation', type: 'range', path: tp('rotation'), key: true, min: -360, max: 360, step: 0.5, unit: '°' }),
+      row({ label: 'Opacity', type: 'range', path: tp('opacity'), key: true, min: 0, max: 100, unit: '%' }),
+      row({ label: 'Blur', type: 'range', path: tp('blur'), key: true, min: 0, max: 60, step: 0.5, unit: 'px' }),
+      isBd ? null : row({ label: 'Tracking', type: 'range', path: tp('tracking'), key: true, min: -20, max: 120, step: 0.5, unit: 'px' }),
+      row({ label: '', type: 'buttons', buttons: [
+        ['Reset transform', () => { clearKeys(`${key}.transform.`); Object.assign(state[key].transform, { x: 0, y: 0, scale: 100, rotation: 0, opacity: 100, blur: 0, ...(isBd ? {} : { tracking: 0 }) }); changed({ sync: true }); }],
+        ['Remove all keyframes', () => { clearKeys(`${key}.`); changed({ sync: true }); toast(`All ${name} keyframes removed`); }, 'Removes keyframes on every property of this layer (values stay as they are now)'],
+      ] }),
+    ].filter(Boolean));
+    transformSec.classList.add('adv-only');
     return [
+      transformSec,
       section(`${name} · In`, [
         row({ label: 'Animation', type: 'select', path: `${base}.in.type`, options: opts }),
         row({ label: 'Start at', type: 'range', path: `${base}.in.delay`, min: 0, max: 10, step: 0.05, unit: 's' }),
@@ -587,7 +792,9 @@
 
   function drawPreview() {
     if (preview.width !== state.comp.width || preview.height !== state.comp.height) { preview.width = state.comp.width; preview.height = state.comp.height; fitFrame(); }
-    lastLayout = Engine.render(pctx, state, time, { guides: true, safeAreas: view.safeAreas, bounds: view.bounds || dragging, selected });
+    const mb = state.comp.motionBlur;
+    const mbOpts = mb && mb.enabled && mb.preview && !dragging ? { samples: Math.min(mb.samples, playing ? 4 : 8) } : { noMotionBlur: true };
+    lastLayout = Engine.renderFrame(pctx, state, time, { guides: true, safeAreas: view.safeAreas, bounds: view.bounds || dragging, selected, ...mbOpts });
     const fps = state.comp.fps;
     const f = Math.round(time * fps);
     $('#timecode').textContent = `${time.toFixed(2)}s · f${f} / ${Math.round(state.comp.duration * fps)}`;
@@ -595,7 +802,12 @@
   }
   Engine.onImageLoad = () => { drawPreview(); syncControls(); };
 
-  function setTime(t) { time = Math.max(0, Math.min(state.comp.duration, t)); drawPreview(); drawTimeline(); }
+  function setTime(t) {
+    time = Math.max(0, Math.min(state.comp.duration, t));
+    drawPreview(); drawTimeline();
+    if (state.keys && Object.keys(state.keys).length) syncKeyable();
+    updateKeyBar();
+  }
   function tick(ts) {
     if (!playing) return;
     const dt = lastTs ? (ts - lastTs) / 1000 : 0; lastTs = ts;
@@ -621,6 +833,7 @@
     if (hit !== selected) selectLayer(hit);
     dragging = true; preview.setPointerCapture(e.pointerId);
     dragStart = { m: [cx, cy], x: state.layout.x, y: state.layout.y };
+    if (advanced && hit && hit === selected) dragStart.layer = { key: hit, x: valueNow(`${hit}.transform.x`), y: valueNow(`${hit}.transform.y`) };
   });
   preview.addEventListener('dblclick', (e) => {
     const [cx, cy] = toComp(e);
@@ -630,6 +843,13 @@
   preview.addEventListener('pointermove', (e) => {
     if (!dragging) return;
     const [mx, my] = toComp(e);
+    if (dragStart.layer) {
+      const d = dragStart.layer;
+      setValue(`${d.key}.transform.x`, Math.round(d.x + mx - dragStart.m[0]));
+      setValue(`${d.key}.transform.y`, Math.round(d.y + my - dragStart.m[1]));
+      changed({ sync: true });
+      return;
+    }
     let x = Math.round(dragStart.x + mx - dragStart.m[0]);
     let y = Math.round(dragStart.y + my - dragStart.m[1]);
     // Snap the box edges to title-safe lines.
@@ -652,7 +872,25 @@
   // ---------- Timeline ----------
   const tl = $('#timeline'), tctx = tl.getContext('2d');
   const TRACKS = [['backdrop', 'Backdrop', '#3b82f6'], ['title', 'Title', '#f59e0b'], ['subtitle', 'Subtitle', '#22c55e']];
-  const TL = { left: 86, right: 16, ruler: 22, rowH: 28 };
+  const TL = { left: 86, right: 16, ruler: 22, rowH: 28, keyH: 18 };
+  const LAYER_ORDER = ['backdrop', 'title', 'subtitle', 'layout', 'comp'];
+  function keyRows() {
+    if (!advanced || !state.keys) return [];
+    return Object.keys(state.keys).filter((p) => state.keys[p]?.length)
+      .sort((a, b) => (LAYER_ORDER.indexOf(a.split('.')[0]) - LAYER_ORDER.indexOf(b.split('.')[0])) || a.localeCompare(b));
+  }
+  const keysTop = () => TL.ruler + 6 + TRACKS.length * TL.rowH + 6;
+  function resizeTimeline() {
+    const rows = keyRows().length;
+    const hgt = 120 + (rows ? rows * TL.keyH + 4 : 0);
+    if (tl.style.height !== `${hgt}px`) { tl.style.height = `${hgt}px`; tl.width = 0; }
+    drawTimeline();
+  }
+  function keyLabel(path) {
+    if (keyLabels[path]) return keyLabels[path];
+    const parts = path.split('.');
+    return `${LAYER_NAMES[parts[0]] || parts[0]} · ${parts.slice(1).join(' ')}`;
+  }
   let tlDrag = null;
   function tlGeom() {
     const dpr = window.devicePixelRatio || 1;
@@ -694,17 +932,56 @@
       g.fillStyle = color + 'aa'; g.fillRect(x1, y + 14, Math.max(0, x2 - x1), 6);
       g.globalAlpha = 1;
     });
+    // Keyframe rows (Advanced)
+    const rows = keyRows();
+    rows.forEach((path, j) => {
+      const y = keysTop() + j * TL.keyH;
+      const layer = path.split('.')[0];
+      const isSel = selected === layer;
+      g.fillStyle = j % 2 ? '#ffffff05' : '#ffffff0a'; g.fillRect(0, y, w, TL.keyH);
+      g.fillStyle = isSel ? '#f59e0b' : '#8a93a6'; g.font = '10px -apple-system, sans-serif';
+      let label = keyLabel(path);
+      while (g.measureText(label).width > TL.left - 12 && label.length > 4) label = label.slice(0, -2) + '…';
+      g.fillText(label, 8, y + 12);
+      const ks = state.keys[path];
+      g.strokeStyle = '#ffffff30'; g.beginPath();
+      if (ks.length > 1) { g.moveTo(sx(ks[0].t), y + TL.keyH / 2); g.lineTo(sx(ks[ks.length - 1].t), y + TL.keyH / 2); g.stroke(); }
+      for (const k of ks) {
+        const x = sx(k.t), cy = y + TL.keyH / 2, sz = selKey && selKey.k === k ? 6 : 4.5;
+        g.fillStyle = selKey && selKey.k === k ? '#f59e0b' : k.e === 'hold' ? '#94a3b8' : '#e5e7eb';
+        g.beginPath(); g.moveTo(x, cy - sz); g.lineTo(x + sz, cy); g.lineTo(x, cy + sz); g.lineTo(x - sz, cy); g.closePath(); g.fill();
+      }
+    });
     // Playhead
     const px = sx(time);
     g.strokeStyle = '#fff'; g.lineWidth = 1.5; g.beginPath(); g.moveTo(px, 0); g.lineTo(px, h); g.stroke(); g.lineWidth = 1;
     g.fillStyle = '#fff'; g.beginPath(); g.moveTo(px - 5, 0); g.lineTo(px + 5, 0); g.lineTo(px, 7); g.fill();
     g.fillStyle = '#596176'; g.font = '10px -apple-system, sans-serif';
-    g.fillText('Drag a bar to retime it · drag its start or end ramp to move only that part', TL.left, h - 6);
+    if (!rows.length) g.fillText('Drag a bar to retime it · drag its start or end ramp to move only that part', TL.left, h - 6);
   }
   tl.addEventListener('pointerdown', (e) => {
     const { sx, st } = tlGeom();
     const r = tl.getBoundingClientRect(); const mx = e.clientX - r.left, my = e.clientY - r.top;
     tl.setPointerCapture(e.pointerId);
+    const rows = keyRows();
+    if (rows.length && my >= keysTop()) {
+      const j = Math.floor((my - keysTop()) / TL.keyH);
+      const path = rows[j];
+      if (path) {
+        const ks = state.keys[path];
+        let best = null, bd = 7;
+        for (const k of ks) { const d = Math.abs(sx(k.t) - mx); if (d < bd) { bd = d; best = k; } }
+        const layer = path.split('.')[0];
+        if (TRACKS.some((t) => t[0] === layer) && selected !== layer) selectLayer(layer, { reveal: true });
+        if (best) {
+          selKey = { path, k: best }; setPlaying(false);
+          tlDrag = { keyDrag: true, path, k: best, moved: false };
+          setTime(best.t);
+          return;
+        }
+        selKey = null;
+      }
+    }
     const i = Math.floor((my - TL.ruler - 6) / TL.rowH);
     if (mx < TL.left && i >= 0 && i < TRACKS.length) { selectLayer(TRACKS[i][0]); tl.releasePointerCapture(e.pointerId); return; }
     if (my > TL.ruler && i >= 0 && i < TRACKS.length) {
@@ -725,6 +1002,13 @@
     const { st } = tlGeom(); const r = tl.getBoundingClientRect();
     const t = st(e.clientX - r.left);
     if (tlDrag.scrub) return setTime(t);
+    if (tlDrag.keyDrag) {
+      tlDrag.k.t = Math.max(0, Math.min(state.comp.duration, fpsT(t)));
+      sortKeys(tlDrag.path);
+      changed({ sync: true });
+      setTime(tlDrag.k.t);
+      return;
+    }
     const a = state[tlDrag.key].anim; const dt = t - tlDrag.t0; const D = state.comp.duration;
     const r2 = (v) => Math.round(Math.max(0, v) * 100) / 100;
     if (tlDrag.mode === 'in' || tlDrag.mode === 'both') a.in.delay = r2(Math.min(tlDrag.delay + dt, D - 0.1));
@@ -733,6 +1017,41 @@
   });
   tl.addEventListener('pointerup', () => (tlDrag = null));
   new ResizeObserver(drawTimeline).observe(tl);
+
+  // ---------- Keyframe inspector bar ----------
+  const keyBar = $('#keyBar');
+  function updateKeyBar() {
+    if (!selKey || !isKeyed(selKey.path) || !keysOf(selKey.path).includes(selKey.k)) { keyBar.hidden = true; return; }
+    keyBar.hidden = false;
+    const { path, k } = selKey;
+    $('#kbLabel').textContent = `◆ ${keyLabel(path)}`;
+    $('#kbTime').textContent = `${k.t.toFixed(2)}s`;
+    const vi = $('#kbValue');
+    const isColor = typeof k.v === 'string';
+    vi.type = isColor ? 'color' : 'number';
+    if (document.activeElement !== vi) vi.value = isColor ? k.v : +(+k.v).toFixed(3);
+    $('#kbEase').value = k.e || 'easeInOutCubic';
+    const last = keysOf(path).indexOf(k) === keysOf(path).length - 1;
+    $('#kbEase').disabled = last;
+    $('#kbEase').title = last ? 'Last keyframe: nothing to ease into' : 'How the value moves from this keyframe to the next';
+  }
+  fillSelect($('#kbEase'), [['easeInOutCubic', 'Easy ease'], ['linear', 'Linear'], ['easeOutCubic', 'Ease out'], ['easeInCubic', 'Ease in'], ['hold', 'Hold (jump)'],
+    { group: 'More', items: Object.entries(EASING_LABELS).filter(([k]) => k !== 'custom' && !['linear', 'easeOutCubic', 'easeInCubic', 'easeInOutCubic'].includes(k)) }]);
+  $('#kbValue').addEventListener('input', (e) => {
+    if (!selKey) return;
+    selKey.k.v = e.target.type === 'color' ? e.target.value : +e.target.value;
+    changed({ sync: true });
+  });
+  $('#kbEase').addEventListener('change', (e) => { if (selKey) { selKey.k.e = e.target.value; changed(); updateKeyBar(); drawTimeline(); } });
+  $('#kbDelete').onclick = () => { if (selKey) { removeKey(selKey.path, selKey.k); changed({ sync: true }); updateKeyBar(); } };
+  $('#kbPrev').onclick = () => jumpKey(-1);
+  $('#kbNext').onclick = () => jumpKey(1);
+  function jumpKey(dir) {
+    const all = [...new Set(keyRows().flatMap((p) => state.keys[p].map((k) => k.t)))].sort((a, b) => a - b);
+    const t = dir > 0 ? all.find((x) => x > time + 1e-4) : [...all].reverse().find((x) => x < time - 1e-4);
+    if (t !== undefined) { setPlaying(false); setTime(t); }
+  }
+  $('#optAdvanced').addEventListener('change', (e) => setAdvanced(e.target.checked));
 
   // ---------- Transport ----------
   $('#btnPlay').onclick = () => setPlaying(!playing);
@@ -752,6 +1071,9 @@
   $('#bgMode').addEventListener('change', (e) => {
     const m = e.target.value;
     if (m === 'image') { $('#bgFile').click(); return; }
+    $('#bgColor').hidden = m !== 'custom';
+    if (m === 'custom') { bgEl.className = 'frame-bg'; bgEl.style.backgroundImage = ''; bgEl.style.background = $('#bgColor').value; return; }
+    bgEl.style.background = '';
     bgEl.className = 'frame-bg ' + m; bgEl.style.backgroundImage = '';
   });
   $('#bgFile').addEventListener('change', (e) => {
@@ -805,18 +1127,80 @@
     await api.presets.remove(v.slice(2));
     await refreshPresets();
   };
-  $('#btnExportPreset').onclick = async () => {
-    const r = await api.presets.exportFile(state.title.text || 'lower-third', clone(state));
-    if (r) toast('Preset file saved');
-  };
-  $('#btnImportPreset').onclick = async () => {
-    const data = await api.presets.importFile();
-    if (!data) return;
+  // ---------- Project files (.l3rd) ----------
+  let projectPath = null, dirty = false;
+  const baseName = (p) => (p ? p.split(/[\\/]/).pop().replace(/\.(l3rd|json)$/i, '') : 'Untitled');
+  function setDirty(d) {
+    dirty = d;
+    $('#docName').textContent = baseName(projectPath);
+    $('#docName').classList.toggle('dirty', d);
+    $('#docName').title = projectPath || 'Not saved yet';
+    document.title = `${baseName(projectPath)}${d ? ' — Edited' : ''} · Thirdline`;
+  }
+  window.addEventListener('beforeunload', (e) => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
+  const toB64 = (buf) => { const b = new Uint8Array(buf); let s = ''; for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000)); return btoa(s); };
+  const fromB64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0)).buffer;
+  async function projectJSON() {
+    // Embed any uploaded fonts the design uses so the file opens the same on another computer.
+    const used = new Set([state.title.font, state.subtitle.font]);
+    const fonts = [];
+    for (const f of userFonts) {
+      if (!used.has(f.family)) continue;
+      let data = f.data;
+      if (!data && api.fonts.read) data = await api.fonts.read(f.file);
+      if (data) fonts.push({ family: f.family, file: f.file, data: toB64(data.buffer ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength) : data) });
+    }
+    return JSON.stringify({ format: 'thirdline-project', version: 1, savedAt: new Date().toISOString(), state, fonts });
+  }
+  async function saveProject(as = false) {
+    const json = await projectJSON();
+    const p = await api.project.save(as ? null : projectPath, json, baseName(projectPath) === 'Untitled' ? (state.title.text || 'Untitled') : baseName(projectPath));
+    if (!p) return false;
+    projectPath = p; setDirty(false);
+    toast(`Saved ${baseName(p)}.l3rd`);
+    return true;
+  }
+  async function loadProjectText(text, p) {
+    let data;
+    try { data = JSON.parse(text); } catch { toast('That file is not a Thirdline project'); return; }
     const st = data.state || data;
+    if (!st || !st.title || !st.backdrop) { toast('That file is not a Thirdline project'); return; }
+    for (const f of data.fonts || []) {
+      const buf = fromB64(f.data);
+      await addUserFont({ family: f.family, file: f.file, data: buf });
+      if (api.fonts.installData) api.fonts.installData(f.file, new Uint8Array(buf)).catch(() => {});
+    }
+    selKey = null;
     replaceState(st);
-    if (data.name) { await api.presets.save(data.name, clone(state)); await refreshPresets(`u:${data.name}`); }
-    toast('Preset imported');
-  };
+    history = [JSON.stringify(state)]; histIndex = 0;
+    projectPath = data.format === 'thirdline-project' ? p : null;
+    setDirty(data.format !== 'thirdline-project');
+    syncControls();
+    $('#btnHold').click();
+    toast(`Opened ${baseName(p)}`);
+  }
+  const confirmDiscard = () => !dirty || confirm('You have unsaved changes. Discard them?');
+  async function openProject() {
+    if (!confirmDiscard()) return;
+    const r = await api.project.open();
+    if (r) await loadProjectText(r.text, r.path);
+  }
+  function newProject() {
+    if (!confirmDiscard()) return;
+    selKey = null;
+    replaceState(Presets.defaultState());
+    history = [JSON.stringify(state)]; histIndex = 0;
+    projectPath = null; setDirty(false);
+    $('#btnHold').click();
+  }
+  api.project.onOpenPath(async (p) => { if (!confirmDiscard()) return; const r = await api.project.read(p); if (r) loadProjectText(r.text, r.path); });
+  api.onMenu((cmd) => ({
+    new: newProject, open: openProject, save: () => saveProject(false), saveAs: () => saveProject(true),
+    export: () => $('#btnExport').click(), undo, redo,
+  })[cmd]?.());
+  $('#btnNew').onclick = newProject;
+  $('#btnOpen').onclick = openProject;
+  $('#btnSave').onclick = (e) => saveProject(e.shiftKey || e.altKey);
 
   function promptDialog(title, value) {
     return new Promise((resolve) => {
@@ -843,7 +1227,8 @@
   function exportSummary() {
     const { width, height, fps, duration } = state.comp;
     const frames = Math.round(duration * fps);
-    $('#exportSummary').textContent = `${width} × ${height} · ${fps} fps · ${duration}s · ${frames} frames`;
+    const mb = state.comp.motionBlur;
+    $('#exportSummary').textContent = `${width} × ${height} · ${fps} fps · ${duration}s · ${frames} frames` + (mb && mb.enabled ? ` · motion blur ${mb.shutter}° × ${mb.samples} samples` : '');
     $('#mp4BgRow').hidden = fmt() !== 'mp4';
   }
   $('#btnExport').onclick = () => {
@@ -885,7 +1270,7 @@
     try {
       for (let i = 0; i < frames; i++) {
         if (exportCancelled) throw new Error('cancelled');
-        Engine.render(ctx, snap, i / fps);
+        Engine.renderFrame(ctx, snap, i / fps, { precise: true });
         if (format === 'mp4') {
           ctx.save(); ctx.globalCompositeOperation = 'destination-over'; ctx.fillStyle = bg; ctx.fillRect(0, 0, width, height); ctx.restore();
         }
@@ -916,16 +1301,23 @@
   document.addEventListener('keydown', (e) => {
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName) && !['checkbox', 'range', 'radio'].includes(document.activeElement.type);
     const mod = e.metaKey || e.ctrlKey;
-    if (mod && e.key.toLowerCase() === 'z') { if (typing) return; e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
-    if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
-    if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); $('#btnSavePreset').click(); return; }
-    if (mod && e.key.toLowerCase() === 'e') { e.preventDefault(); $('#btnExport').click(); return; }
+    if (mod && api.browser) {
+      const k = e.key.toLowerCase();
+      if (k === 'z') { if (typing) return; e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+      if (k === 'y') { e.preventDefault(); redo(); return; }
+      if (k === 's') { e.preventDefault(); saveProject(e.shiftKey); return; }
+      if (k === 'o') { e.preventDefault(); openProject(); return; }
+      if (k === 'e') { e.preventDefault(); $('#btnExport').click(); return; }
+    }
     if (typing || dlg.open) return;
     if (e.code === 'Space') { e.preventDefault(); setPlaying(!playing); }
     else if (e.key === 'ArrowLeft') $('#btnPrevFrame').click();
     else if (e.key === 'ArrowRight') $('#btnNextFrame').click();
     else if (e.key === 'Home') $('#btnStart').click();
-    else if (e.key === 'Escape') selectLayer(null);
+    else if (e.key === 'Escape') { selKey = null; updateKeyBar(); selectLayer(null); }
+    else if ((e.key === 'Delete' || e.key === 'Backspace') && selKey) { e.preventDefault(); removeKey(selKey.path, selKey.k); changed({ sync: true }); updateKeyBar(); }
+    else if (e.key.toLowerCase() === 'j') jumpKey(-1);
+    else if (e.key.toLowerCase() === 'k') jumpKey(1);
     else if (e.key === 'Tab' && document.activeElement === document.body) { e.preventDefault(); const order = ['backdrop', 'title', 'subtitle']; selectLayer(order[(order.indexOf(selected) + (e.shiftKey ? 2 : 1)) % 3]); }
   });
   $('#btnUndo').onclick = undo;
@@ -937,6 +1329,7 @@
     showLeft = buildTabs($('nav[data-for=left]'), $('#leftBody'), leftTabs);
     showRight = buildTabs($('nav[data-for=right]'), $('#rightBody'), rightTabs);
     document.querySelectorAll('.layer-chips button').forEach((b) => (b.onclick = () => selectLayer(b.dataset.layer === selected ? null : b.dataset.layer)));
+    setAdvanced(advanced);
     syncControls(); refreshVisibility();
     await refreshPresets();
     await document.fonts.ready; await ensureFonts();

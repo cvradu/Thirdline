@@ -11,14 +11,19 @@
   <header class="topbar">
     <div class="brand"><span class="logo">▁▃</span> Thirdline</div>
     <div class="topbar-group">
-      <label class="lbl">Preset</label>
-      <select id="presetSelect"></select>
-      <button id="btnSavePreset" title="Save current design as a preset">Save</button>
-      <button id="btnDeletePreset" title="Delete selected saved preset">Delete</button>
-      <button id="btnImportPreset" title="Import preset file">Import…</button>
-      <button id="btnExportPreset" title="Export preset to a file">Share…</button>
+      <button id="btnNew" title="New project (Cmd/Ctrl+N)">New</button>
+      <button id="btnOpen" title="Open a .l3rd project (Cmd/Ctrl+O)">Open…</button>
+      <button id="btnSave" title="Save project as .l3rd (Cmd/Ctrl+S)">Save</button>
+      <span class="docname" id="docName">Untitled</span>
     </div>
     <div class="topbar-group">
+      <label class="lbl">Style</label>
+      <select id="presetSelect"></select>
+      <button id="btnSavePreset" title="Save the current design to your style list">Save style</button>
+      <button id="btnDeletePreset" title="Delete selected saved style">Delete</button>
+    </div>
+    <div class="topbar-group">
+      <label class="chk adv-toggle" title="Show keyframe controls, layer transforms, masks and text animators"><input type="checkbox" id="optAdvanced" /> Advanced</label>
       <button id="btnUndo" title="Undo (Ctrl/Cmd+Z)">↶</button>
       <button id="btnRedo" title="Redo (Ctrl/Cmd+Shift+Z)">↷</button>
       <button id="btnExport" class="primary">Export…</button>
@@ -44,9 +49,11 @@
           <option value="mid">Grey</option>
           <option value="light">Light</option>
           <option value="green">Green</option>
+          <option value="custom">Custom colour…</option>
           <option value="image">Reference image…</option>
         </select>
         <input type="file" id="bgFile" accept="image/*" hidden />
+        <input type="color" id="bgColor" value="#1e3a8a" hidden title="Preview background colour" />
         <div class="layer-chips" title="Select a layer (or click it in the preview)">
           <button data-layer="backdrop">Backdrop</button><button data-layer="title">Title</button><button data-layer="subtitle">Subtitle</button>
         </div>
@@ -69,6 +76,14 @@
         <label class="chk"><input type="checkbox" id="optLoop" checked /> Loop</label>
         <span class="timecode" id="timecode">00:00:00</span>
         <input type="range" id="scrub" min="0" max="1" step="0.0001" value="0" />
+      </div>
+      <div class="keybar" id="keyBar" hidden>
+        <b id="kbLabel"></b>
+        <span class="muted">at</span> <span id="kbTime" class="timecode" style="min-width:0"></span>
+        <label class="lbl">Value</label> <input id="kbValue" type="number" step="any" />
+        <label class="lbl">Ease to next</label> <select id="kbEase"></select>
+        <button id="kbPrev" title="Previous keyframe (J)">◀◆</button><button id="kbNext" title="Next keyframe (K)">◆▶</button>
+        <button id="kbDelete" title="Delete keyframe (Delete)">Delete</button>
       </div>
       <canvas id="timeline" height="120"></canvas>
     </section>

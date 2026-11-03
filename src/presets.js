@@ -7,10 +7,14 @@
     out: { type: outType, duration: o.outDur ?? 0.45, offset: o.offset ?? 0, easing: o.outEase ?? 'easeInCubic', bezier: [0.42, 0, 1, 1] },
   });
 
+  const transform = (text) => ({ x: 0, y: 0, scale: 100, rotation: 0, opacity: 100, blur: 0, ...(text ? { tracking: 0 } : {}) });
+  const mask = () => ({ enabled: false, shape: 'rect', x: 100, y: 760, w: 900, h: 240, radius: 0, feather: 0, invert: false });
+
   function defaultState() {
     return {
+      keys: {},
       version: 1,
-      comp: { width: 1920, height: 1080, fps: 30, duration: 6 },
+      comp: { width: 1920, height: 1080, fps: 30, duration: 6, motionBlur: { enabled: false, shutter: 180, samples: 12, preview: false } },
       layout: { x: 144, y: 972, hAnchor: 'left', vAnchor: 'bottom', align: 'left', lineGap: 14 },
       backdrop: {
         type: 'shape',
@@ -18,7 +22,18 @@
         fill: '#101828',
         fill2: '#1d4ed8',
         gradient: false,
+        fillType: 'solid',
+        fill3: '#7c3aed',
+        fill4: '#06b6d4',
         gradientAngle: 0,
+        gradCX: 50,
+        gradCY: 50,
+        gradRadius: 75,
+        gradAnim: 'none',
+        gradSpeed: 4,
+        shimmerColor: '#ffffff',
+        shimmerOpacity: 0.45,
+        texture: { enabled: false, src: '', name: '', blend: 'overlay', opacity: 0.6, fit: 'cover', scale: 1, offsetX: 0, offsetY: 0, driftX: 0, driftY: 0 },
         opacity: 0.92,
         accentColor: '#f59e0b',
         accentWidth: 10,
@@ -32,6 +47,8 @@
         shadow: { on: true, color: '#000000', opacity: 0.35, blur: 24, offsetX: 0, offsetY: 8 },
         image: { src: '', name: '', fit: 'box', scale: 1, textOffsetX: 0, textOffsetY: 0 },
         anim: anim('wipeRight', 'wipeLeft', { inDur: 0.7, inEase: 'easeInOutQuart', outDur: 0.5, outEase: 'easeInOutQuart' }),
+        transform: transform(false),
+        mask: mask(),
       },
       title: {
         text: 'Alexandra Popescu',
@@ -39,6 +56,9 @@
         letterSpacing: 0, uppercase: false, clipToBox: true,
         shadow: { on: false, color: '#000000', opacity: 0.6, blur: 10, offsetY: 2 },
         anim: anim('maskUp', 'slideDown', { delay: 0.35, inDur: 0.6, inEase: 'easeOutQuart', offset: 0.15, outDur: 0.35, distance: 60 }),
+        transform: transform(true),
+        mask: mask(),
+        animators: [],
       },
       subtitle: {
         text: 'Head of Product · Studio North',
@@ -46,6 +66,9 @@
         letterSpacing: 0.5, uppercase: false, clipToBox: true,
         shadow: { on: false, color: '#000000', opacity: 0.6, blur: 10, offsetY: 2 },
         anim: anim('lettersFade', 'fade', { delay: 0.55, inDur: 0.8, inEase: 'easeOutCubic', offset: 0.2, outDur: 0.3, stagger: 0.15 }),
+        transform: transform(true),
+        mask: mask(),
+        animators: [],
       },
     };
   }
@@ -65,7 +88,7 @@
     {
       name: 'Sport Slant',
       patch: {
-        backdrop: { shape: 'slant', fill: '#dc2626', fill2: '#7f1d1d', gradient: true, opacity: 1, skew: 34, padX: 30, padY: 18, shadow: { on: true, color: '#000000', opacity: 0.5, blur: 0, offsetX: 10, offsetY: 10 }, anim: anim('slideLeft', 'slideLeft', { distance: 600, inDur: 0.5, inEase: 'easeOutExpo', outEase: 'easeInExpo', outDur: 0.4 }) },
+        backdrop: { shape: 'slant', fill: '#dc2626', fill2: '#7f1d1d', fillType: 'linear', opacity: 1, skew: 34, padX: 30, padY: 18, shadow: { on: true, color: '#000000', opacity: 0.5, blur: 0, offsetX: 10, offsetY: 10 }, anim: anim('slideLeft', 'slideLeft', { distance: 600, inDur: 0.5, inEase: 'easeOutExpo', outEase: 'easeInExpo', outDur: 0.4 }) },
         title: { font: 'Anton', weight: 400, size: 64, uppercase: true, letterSpacing: 1, color: '#ffffff', anim: anim('slideLeft', 'slideRight', { delay: 0.2, inDur: 0.5, inEase: 'easeOutExpo', distance: 200, offset: 0.15 }) },
         subtitle: { font: 'Barlow Condensed', weight: 600, size: 32, uppercase: true, letterSpacing: 2, color: '#fde68a', anim: anim('lettersRise', 'fade', { delay: 0.35, inDur: 0.5, stagger: 0.1, offset: 0.15, outDur: 0.25 }) },
       },
@@ -105,6 +128,18 @@
     },
   ];
 
+  // Sample gradient looks for the backdrop (applied on top of the current design).
+  const GRADIENTS = [
+    { name: 'Sunset flow', patch: { fillType: 'linear', fill: '#f97316', fill2: '#db2777', gradientAngle: 0, gradAnim: 'slide', gradSpeed: 5 } },
+    { name: 'Neon spin', patch: { fillType: 'linear', fill: '#7c3aed', fill2: '#06b6d4', gradientAngle: 0, gradAnim: 'rotate', gradSpeed: 6 } },
+    { name: 'Gold shimmer', patch: { fillType: 'linear', fill: '#a16207', fill2: '#facc15', gradientAngle: 20, gradAnim: 'shimmer', gradSpeed: 3, shimmerColor: '#fffbeb', shimmerOpacity: 0.6 } },
+    { name: 'Ocean pulse', patch: { fillType: 'radial', fill: '#22d3ee', fill2: '#0c4a6e', gradCX: 30, gradCY: 50, gradRadius: 90, gradAnim: 'pulse', gradSpeed: 3 } },
+    { name: 'Midnight orbit', patch: { fillType: 'radial', fill: '#6366f1', fill2: '#020617', gradCX: 50, gradCY: 50, gradRadius: 70, gradAnim: 'orbit', gradSpeed: 6 } },
+    { name: 'Aurora swirl', patch: { fillType: 'fourPoint', fill: '#22c55e', fill2: '#06b6d4', fill3: '#7c3aed', fill4: '#0f172a', gradAnim: 'swirl', gradSpeed: 6 } },
+    { name: 'Candy breathe', patch: { fillType: 'fourPoint', fill: '#f472b6', fill2: '#fb923c', fill3: '#a78bfa', fill4: '#38bdf8', gradAnim: 'breathe', gradSpeed: 4 } },
+    { name: 'Steel (static)', patch: { fillType: 'linear', fill: '#334155', fill2: '#0f172a', gradientAngle: 90, gradAnim: 'none' } },
+  ];
+
   function deepMerge(base, patch) {
     if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return patch === undefined ? base : patch;
     const out = Array.isArray(base) ? [...base] : { ...base };
@@ -118,9 +153,15 @@
   global.Presets = {
     defaultState,
     BUILTIN,
+    GRADIENTS,
     deepMerge,
     // Fill in any missing keys from an older/partial preset.
-    normalize: (s) => deepMerge(defaultState(), s || {}),
+    normalize: (s) => {
+      const out = deepMerge(defaultState(), s || {});
+      // Older files used a boolean "gradient" flag.
+      if (s && s.backdrop && s.backdrop.gradient && !s.backdrop.fillType) out.backdrop.fillType = 'linear';
+      return out;
+    },
     builtin: (i) => deepMerge(defaultState(), BUILTIN[i].patch),
   };
 })(typeof window !== 'undefined' ? window : globalThis);
