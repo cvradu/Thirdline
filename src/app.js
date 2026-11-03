@@ -2446,7 +2446,16 @@
     if (preview.width !== state.comp.width || preview.height !== state.comp.height) { preview.width = state.comp.width; preview.height = state.comp.height; fitFrame(); }
     const mb = state.comp.motionBlur;
     const mbOpts = mb && mb.enabled && mb.preview && !dragging ? { samples: Math.min(mb.samples, playing ? 4 : 8) } : { noMotionBlur: true };
-    lastLayout = Engine.renderFrame(pctx, state, time, { guides: !cleanView, safeAreas: view.safeAreas, bounds: view.bounds || dragging, selected, also: advanced && multiSel.length > 1 ? multiSel : null, anchor: advanced, ...mbOpts });
+    // Start every frame from a clean context, so a drawing step that failed half-way can never
+    // leave a stretched or shifted transform behind for the frames after it.
+    if (pctx.reset) pctx.reset(); else { pctx.setTransform(1, 0, 0, 1, 0, 0); pctx.globalAlpha = 1; pctx.globalCompositeOperation = 'source-over'; pctx.filter = 'none'; }
+    try {
+      lastLayout = Engine.renderFrame(pctx, state, time, { guides: !cleanView, safeAreas: view.safeAreas, bounds: view.bounds || dragging, selected, also: advanced && multiSel.length > 1 ? multiSel : null, anchor: advanced, ...mbOpts });
+    } catch (err) {
+      console.error(err);
+      if (!drawPreview.warned) { drawPreview.warned = true; toast(`Preview problem: ${err.message}. Please send this message to support.`); }
+      if (pctx.reset) pctx.reset();
+    }
     if (!cleanView) { if (advanced && selected) drawMotionPath(); drawPenOverlay(); drawHandles(); }
     const fps = state.comp.fps;
     const f = Math.round(time * fps);
