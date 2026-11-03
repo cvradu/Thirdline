@@ -11,7 +11,7 @@ const { chromium } = require('playwright');
   let st = await S();
   let box = await p.locator('#timeline').boundingBox();
   const L = 150, R = 16, W = box.width;
-  const sx = (t) => box.x + L + (t / st.comp.duration) * (W - L - R);
+  const sx = (t) => box.x + L + (t / (st.comp.duration * 1.15)) * (W - L - R);
   const rowY = (i) => box.y + 22 + 6 + 28 * i + 11;
   // 1. click the title's in ramp → keybar shows the preset
   const a = st.title.anim;

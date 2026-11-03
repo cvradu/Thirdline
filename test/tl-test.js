@@ -9,7 +9,7 @@ const { chromium } = require('playwright');
   const box = await p.locator('#timeline').boundingBox();
   const geo = await p.evaluate(() => { const s = window.__l3rd.state; return { D: s.comp.duration, a: s.title.anim }; });
   const W = box.width, L = 150, R = 16;
-  const sx = (t) => box.x + L + (t / geo.D) * (W - L - R);
+  const sx = (t) => box.x + L + (t / (geo.D * 1.15)) * (W - L - R);
   const y = box.y + 22 + 6 + 28 * 1 + 10; // title row
   const inMid = sx(geo.a.in.delay + geo.a.in.duration * 0.6);
   const before = JSON.stringify(geo.a.in);

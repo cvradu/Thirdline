@@ -1597,7 +1597,8 @@
 
   // ---------- Timeline ----------
   const tl = $('#timeline'), tctx = tl.getContext('2d');
-  const TL = { left: 86, right: 16, ruler: 22, rowH: 28, keyH: 18 };
+  const TL = { left: 86, right: 16, ruler: 22, rowH: 28, keyH: 18, extra: 1.15 };
+  let tlSpan = 0; // view length frozen while the end handle is dragged
   const collapsed = {}; // layer → true when its keyframe rows are folded away
   let selPreset = null; // { key, dir: 'in' | 'out' } — a preset in/out animation picked on the timeline
   function keyRows() {
@@ -1645,10 +1646,11 @@
     const dpr = window.devicePixelRatio || 1;
     const w = tl.clientWidth, h = tl.clientHeight;
     if (tl.width !== Math.round(w * dpr)) { tl.width = Math.round(w * dpr); tl.height = Math.round(h * dpr); }
-    const D = state.comp.duration;
-    const sx = (t) => TL.left + (t / D) * (w - TL.left - TL.right);
-    const st = (x) => ((x - TL.left) / (w - TL.left - TL.right)) * D;
-    return { dpr, w, h, sx, st };
+    // The view runs a bit past the end so the end-of-animation handle can be dragged out.
+    const span = tlSpan || state.comp.duration * TL.extra;
+    const sx = (t) => TL.left + (t / span) * (w - TL.left - TL.right);
+    const st = (x) => ((x - TL.left) / (w - TL.left - TL.right)) * span;
+    return { dpr, w, h, sx, st, span };
   }
   function diamond(g, x, cy, sz) { g.beginPath(); g.moveTo(x, cy - sz); g.lineTo(x + sz, cy); g.lineTo(x, cy + sz); g.lineTo(x - sz, cy); g.closePath(); g.fill(); }
   function fitText(g, s, max) { while (g.measureText(s).width > max && s.length > 4) s = s.slice(0, -2) + '…'; return s; }
@@ -1665,6 +1667,12 @@
       g.beginPath(); g.moveTo(x, TL.ruler - 6); g.lineTo(x, h); g.stroke();
       g.fillText(`${+t.toFixed(1)}s`, x + 3, 12);
     }
+    // Past the end: shaded, with a handle on the ruler to change the length.
+    const xEnd = sx(D);
+    g.fillStyle = '#00000055'; g.fillRect(xEnd, 0, w - xEnd, h);
+    g.strokeStyle = '#f59e0b'; g.lineWidth = 1.5; g.beginPath(); g.moveTo(xEnd, 0); g.lineTo(xEnd, h); g.stroke(); g.lineWidth = 1;
+    g.fillStyle = '#f59e0b'; g.beginPath(); g.roundRect ? g.roundRect(xEnd - 5, 2, 10, TL.ruler - 6, 3) : g.rect(xEnd - 5, 2, 10, TL.ruler - 6); g.fill();
+    g.fillStyle = '#111'; g.fillRect(xEnd - 2, 7, 1, TL.ruler - 16); g.fillRect(xEnd + 1, 7, 1, TL.ruler - 16);
     const rows = timelineRows();
     let keyIdx = 0;
     for (const row of rows) {
@@ -1756,6 +1764,14 @@
     tl.setPointerCapture(e.pointerId);
     const row = rowAt(timelineRows(), my);
     const release = () => { try { tl.releasePointerCapture(e.pointerId); } catch {} };
+    // End handle on the ruler (or the end line anywhere outside a layer bar's edge): change the length.
+    if (Math.abs(mx - sx(state.comp.duration)) <= 7 && (my < TL.ruler || !row || row.type !== 'bar')) {
+      const g0 = tlGeom();
+      tlSpan = g0.span;
+      tlDrag = { endDrag: true, x0: mx, D0: state.comp.duration, pps: (g0.w - TL.left - TL.right) / g0.span };
+      setPlaying(false);
+      return;
+    }
     if (row && row.type === 'group') { if (mx < TL.left) { collapsed.other = !collapsed.other; resizeTimeline(); release(); return; } }
     if (row && row.type === 'key') {
       const ks = state.keys[row.path];
@@ -1800,6 +1816,15 @@
     const { st } = tlGeom(); const r = tl.getBoundingClientRect();
     const t = st(e.clientX - r.left);
     if (tlDrag.scrub) return setTime(t);
+    if (tlDrag.endDrag) {
+      // Out animations are measured from the end, so they move with it; keyframes stay put.
+      const D = Math.max(0.5, Math.min(120, fpsT(tlDrag.D0 + (e.clientX - r.left - tlDrag.x0) / tlDrag.pps)));
+      if (D > tlSpan) tlSpan = D;
+      state.comp.duration = +D.toFixed(3);
+      if (time > D) setTime(D);
+      changed({ sync: true });
+      return;
+    }
     if (tlDrag.keyDrag) {
       tlDrag.k.t = Math.max(0, Math.min(state.comp.duration, fpsT(t)));
       sortKeys(tlDrag.path);
@@ -1816,7 +1841,7 @@
     if (tlDrag.mode === 'outDur') a.out.duration = Math.max(0.05, r2(Math.min(tlDrag.outDur - dt, D - a.out.offset)));
     changed({ sync: true });
   });
-  tl.addEventListener('pointerup', () => (tlDrag = null));
+  tl.addEventListener('pointerup', () => { const wasEnd = tlDrag && tlDrag.endDrag; tlDrag = null; if (wasEnd) { tlSpan = 0; drawTimeline(); } });
   // Which part of a layer bar is under the mouse:
   //  outer end of a ramp → move the in/out point; the ramp (graph) itself → change that transition's duration;
   //  the hold section → move the whole layer.
