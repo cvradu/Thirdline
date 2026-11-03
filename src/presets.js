@@ -8,7 +8,7 @@
     loop: { type: 'none', amount: 50, period: 2.5, together: false },
   });
 
-  const transform = (text) => ({ x: 0, y: 0, scale: 100, rotation: 0, opacity: 100, blur: 0, anchorX: 50, anchorY: 50, ...(text ? { tracking: 0 } : {}) });
+  const transform = (text) => ({ x: 0, y: 0, scale: 100, scaleX: 100, scaleY: 100, rotation: 0, opacity: 100, blur: 0, anchorX: 50, anchorY: 50, ...(text ? { tracking: 0 } : {}) });
   const mask = () => ({ enabled: false, shape: 'rect', x: 100, y: 760, w: 900, h: 240, radius: 0, corners: { on: false, tl: 0, tr: 0, br: 0, bl: 0 }, points: [], feather: 0, invert: false });
 
   function defaultState() {

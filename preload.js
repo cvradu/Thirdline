@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('api', {
     remove: (file) => ipcRenderer.invoke('fonts:remove', file),
     installData: (file, data) => ipcRenderer.invoke('fonts:installData', file, data),
     read: (file) => ipcRenderer.invoke('fonts:read', file),
+    openManager: () => ipcRenderer.invoke('fonts:openManager'),
   },
   exporter: {
     chooseDest: (format, baseName) => ipcRenderer.invoke('export:chooseDest', format, baseName),

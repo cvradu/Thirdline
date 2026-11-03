@@ -52,7 +52,7 @@
         </div>
       </div>
       <div class="adv-only ptabs" id="leftTabs">
-        <button data-ltab="layers" class="on">Layers</button><button data-ltab="anims">Animations</button><button data-ltab="styles">Styles</button>
+        <button data-ltab="layers" class="on">Layers</button><button data-ltab="anims">Animations</button><button data-ltab="styles">Styles</button><button data-ltab="assets">Assets</button>
       </div>
       <div class="adv-only scroll" id="advLeft">
         <div class="pane" data-lpane="layers">
@@ -65,6 +65,7 @@
                 <button data-add="line">Line</button>
                 <button data-add="ellipse">Circle / dot</button>
                 <button data-add="rect">Rectangle</button>
+                <button data-add="controller" title="An invisible layer to parent other layers to (never exported)">Controller (null)</button>
                 <hr /><button data-add="group" title="Group the selected layers (Cmd/Ctrl+G)">Group selected layers</button>
               </div>
             </span>
@@ -76,6 +77,11 @@
           <h3>Animation presets</h3>
           <div id="animLib" class="lib"></div>
           <div class="sub">Click to use as the selected layer’s <b>in</b> animation, Shift+click for <b>out</b>.</div>
+        </div>
+        <div class="pane" data-lpane="assets" hidden>
+          <h3>Assets <span class="spacer"></span><button id="btnImportAssets" class="link" title="Import images (PNG, JPG, SVG, WebP, GIF). You can pick several at once.">+ Import</button></h3>
+          <div id="assetGrid" class="asset-grid"></div>
+          <div class="sub">Click an asset to add it as a layer, or drag it onto the preview. Drop files here to import them. Right-click to remove.</div>
         </div>
         <div class="pane" data-lpane="styles" hidden>
           <h3>Styles</h3>
@@ -97,6 +103,7 @@
         <span class="bar-parent adv-only" id="barParent" title="Follow another layer’s position, rotation and scale (like parenting in After Effects)"><span class="lbl">Parent</span><select id="parentSel"></select></span>
         <span class="spacer"></span>
         <span class="menu-wrap">
+          <button id="btnClean" class="ghost" title="Clean preview: hide boxes, handles and guides (` or Shift+Cmd/Ctrl+H)"><svg viewBox="0 0 24 24" width="15" height="15" style="vertical-align:-3px"><path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6S2 12 2 12z" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg> Clean</button>
           <button id="btnView" class="ghost" title="Preview background, safe areas and other guides">View ▾</button>
           <div class="dropdown view-menu" id="viewMenu" hidden>
             <label class="vrow"><span>Preview on</span>
@@ -138,6 +145,7 @@
           <button data-addtool="text" title="Add text"><svg viewBox="0 0 24 24" width="18" height="18"><path d="M5 5h14v3h-2V7h-4v11h2v2H9v-2h2V7H7v1H5z" fill="currentColor"/></svg></button>
           <button data-addtool="image" title="Add a logo or image"><svg viewBox="0 0 24 24" width="18" height="18"><rect x="4" y="5" width="16" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M4 16l5-5 4 4 3-3 4 4" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></button>
           <hr />
+          <button data-addtool="controller" title="Add a controller: an invisible layer other layers can follow (never exported)"><svg viewBox="0 0 24 24" width="18" height="18"><rect x="5" y="5" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 8v8M8 12h8" stroke="currentColor" stroke-width="1.6"/></svg></button>
           <button data-tool="hand" title="Hand: drag to move around a zoomed preview (H, or hold Space)"><svg viewBox="0 0 24 24" width="18" height="18"><path d="M8 12V6a1.5 1.5 0 013 0v5m0-6a1.5 1.5 0 013 0v6m0-5a1.5 1.5 0 013 0v7c0 4-2.5 6-6 6s-5-2-7-5l-1-2a1.4 1.4 0 012.3-1.5L8 14" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></button>
         </div>
         <div class="drop-hint" id="dropHint" hidden>Drop a video or photo to preview over it</div>
@@ -239,6 +247,7 @@
         <label class="chk"><input type="checkbox" id="varSquare" /> 1:1 square</label>
         <div class="var-thumbs" id="varThumbs"></div>
       </div></div>
+      <div class="row"><label>Acceleration</label><label class="chk" title="Draws frames on the graphics card and uses Apple's hardware video encoder when the format has one (ProRes, H.264). Falls back to the regular encoder automatically."><input type="checkbox" id="exportGpu" checked /> Use GPU and hardware encoding</label></div>
       <div class="row" id="mp4BgRow"><label>Background (MP4)</label><input type="color" id="exportBg" value="#00b140" /></div>
       <p class="muted" id="exportSummary"></p>
       <div class="progress" id="exportProgress" hidden><div class="bar"></div><span></span></div>

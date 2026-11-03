@@ -290,7 +290,7 @@
   }
 
   // ---------- Layer transform (Advanced) ----------
-  const NO_TR = { x: 0, y: 0, scale: 100, rotation: 0, opacity: 100, blur: 0, tracking: 0, anchorX: 50, anchorY: 50 };
+  const NO_TR = { x: 0, y: 0, scale: 100, scaleX: 100, scaleY: 100, rotation: 0, opacity: 100, blur: 0, tracking: 0, anchorX: 50, anchorY: 50 };
   let layerBlur = 0;
   // Anchor point: where the layer scales and rotates from, in % of its box (50/50 = centre).
   function pivotOf(tr, b) {
@@ -371,10 +371,12 @@
       const g = getLayer(state, f.id), isGroup = !!g && g.kind === 'group';
       // Only a group passes its opacity down (After Effects parenting doesn't).
       applyLayerTransform(ctx, f.tr, f.b, anim && isGroup);
-      if (anim && isGroup) {
+      // Children follow their parent's In/Out motion and loops (tethered, as in After Effects).
+      // Only a group also passes on its fade, blur and wipe.
+      if (anim && g && g.anim) {
         const ph = phaseAt(g.anim, curT, state.comp.duration);
         const r = animParams(effType(ph), ph.p, f.b, g.anim.distance, anchored(f.tr) ? pivotOf(f.tr, f.b) : null);
-        applyParams(ctx, r, 200, 0);
+        applyParams(ctx, isGroup ? r : { ...r, alpha: 1, blur: 0, clip: null }, 200, 0);
         applyLoop(ctx, g.anim, curT, state.comp.duration, f.b, pivotOf(f.tr, f.b));
       }
     }
@@ -526,6 +528,71 @@
     if (c && c.on) return [c.tl || 0, c.tr || 0, c.br || 0, c.bl || 0];
     return fallback ?? (ly && ly.radius) ?? 0;
   }
+
+  // ---------- Torn paper ----------
+  // The outline is sampled every ~2 px and pushed inwards by fractal noise measured along the edge,
+  // so the tears stay put when the layer moves. An optional paper rim shows under the colour.
+  const tHash = (i, seed) => { let h = Math.imul(i | 0, 374761393) ^ Math.imul(seed | 0, 668265263); h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967295; };
+  const tNoise = (x, seed) => { const i = Math.floor(x), f = x - i, u = f * f * (3 - 2 * f); return tHash(i, seed) * (1 - u) + tHash(i + 1, seed) * u; };
+  function tFbm(x, seed) { let a = 1, sum = 0, n = 0, fr = 1; for (let o = 0; o < 5; o++) { sum += a * tNoise(x * fr, seed + o * 131); n += a; a *= 0.55; fr *= 2.3; } return sum / n; }
+  function resamplePoly(P, step = 2) {
+    const out = [];
+    for (let i = 0; i < P.length; i++) {
+      const [x0, y0] = P[i], [x1, y1] = P[(i + 1) % P.length], n = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) / step));
+      for (let k = 0; k < n; k++) out.push([x0 + ((x1 - x0) * k) / n, y0 + ((y1 - y0) * k) / n]);
+    }
+    return out;
+  }
+  // Outline as a polygon: 'rect' (with corner radii), 'ellipse' or a list of points.
+  function outlinePoly(kind, b, rad) {
+    if (Array.isArray(kind)) return resamplePoly(kind);
+    if (kind === 'ellipse') {
+      const cx = b.x + b.w / 2, cy = b.y + b.h / 2, n = Math.max(24, Math.ceil((Math.PI * (b.w + b.h)) / 4));
+      const P = []; for (let i = 0; i < n; i++) { const a = -Math.PI / 2 + (i / n) * Math.PI * 2; P.push([cx + (Math.cos(a) * b.w) / 2, cy + (Math.sin(a) * b.h) / 2]); }
+      return resamplePoly(P);
+    }
+    const R = (Array.isArray(rad) ? rad : [rad, rad, rad, rad]).map((r) => Math.max(0, Math.min(r || 0, b.w / 2, b.h / 2)));
+    const P = [], arc = (cx, cy, r, a0) => { if (r <= 0) { P.push([cx + Math.cos(a0 + Math.PI / 4) * 0, cy]); return; } const n = Math.max(2, Math.ceil(r / 2)); for (let k = 0; k <= n; k++) { const a = a0 + (k / n) * (Math.PI / 2); P.push([cx + Math.cos(a) * r, cy + Math.sin(a) * r]); } };
+    const { x, y, w, h } = b;
+    if (R[1] > 0) arc(x + w - R[1], y + R[1], R[1], -Math.PI / 2); else P.push([x + w, y]);
+    if (R[2] > 0) arc(x + w - R[2], y + h - R[2], R[2], 0); else P.push([x + w, y + h]);
+    if (R[3] > 0) arc(x + R[3], y + h - R[3], R[3], Math.PI / 2); else P.push([x, y + h]);
+    if (R[0] > 0) arc(x + R[0], y + R[0], R[0], Math.PI); else P.push([x, y]);
+    return resamplePoly(P);
+  }
+  // Returns { color, paper } polygons (paper is null without a rim).
+  function tornPolys(P, t) {
+    const n = P.length; if (n < 3) return { color: P, paper: null };
+    let area = 0; for (let i = 0; i < n; i++) { const [ax, ay] = P[i], [bx, by] = P[(i + 1) % n]; area += ax * by - bx * ay; }
+    const sgn = area > 0 ? 1 : -1, amt = Math.max(0, t.amount ?? 10), size = Math.max(2, t.size ?? 40), rim = Math.max(0, t.edge ?? 0), seed = Math.round(t.seed ?? 1);
+    const color = [], paper = rim > 0 ? [] : null;
+    let s = 0;
+    for (let i = 0; i < n; i++) {
+      const [px, py] = P[(i - 1 + n) % n], [x, y] = P[i], [qx, qy] = P[(i + 1) % n];
+      if (i) s += Math.hypot(x - px, y - py);
+      let nx = -(qy - py) * sgn, ny = (qx - px) * sgn; const l = Math.hypot(nx, ny) || 1; nx /= l; ny /= l; // inward
+      const f = s / size, jag = (tHash(Math.floor(s / 3), seed + 7) - 0.5) * 0.35;
+      const dc = amt * Math.min(1, Math.max(0, tFbm(f, seed) * 1.25 - 0.1 + jag * 0.5));
+      color.push([x + nx * dc, y + ny * dc]);
+      if (paper) {
+        const fib = (tHash(Math.floor(s / 1.5), seed + 23) - 0.5) * rim * 0.5;
+        const dp = Math.max(0, dc - rim * (0.35 + 1.1 * tFbm(f * 2.7, seed + 51)) + fib);
+        paper.push([x + nx * dp, y + ny * dp]);
+      }
+    }
+    return { color, paper };
+  }
+  const tracePoly = (ctx, P) => () => { ctx.beginPath(); P.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); ctx.closePath(); };
+  // Paints the paper rim (with the layer's shadow) and returns the torn colour path.
+  function tornPath(ctx, t, P) {
+    const { color, paper } = tornPolys(P, t);
+    if (paper) {
+      ctx.save(); ctx.fillStyle = t.paperColor || '#f4efe6'; tracePoly(ctx, paper)(); ctx.fill(); ctx.restore();
+      ctx.shadowColor = 'transparent';
+    }
+    return tracePoly(ctx, color);
+  }
+  const tornOn = (o) => !!(o && o.torn && o.torn.on && (o.torn.amount > 0 || o.torn.edge > 0));
 
   // ---------- Pen paths ----------
   // A path is a list of points { x, y, ix, iy, ox, oy, r }: (ix, iy) / (ox, oy) are the in / out
@@ -815,6 +882,16 @@
     if (bd.type !== 'shape') { ctx.restore(); return; }
     const rect = (x, y, w, h) => () => { ctx.beginPath(); ctx.rect(x, y, w, h); };
     const rr = (x, y, w, h, r) => () => roundRectPath(ctx, x, y, w, h, r);
+    if (tornOn(bd) && ['rect', 'rounded', 'pill', 'slant', 'accent'].includes(bd.shape)) {
+      const s = bd.skew || 0;
+      const P = bd.shape === 'slant' ? outlinePoly([[b.x + s, b.y], [b.x + b.w, b.y], [b.x + b.w - s, b.y + b.h], [b.x, b.y + b.h]])
+        : outlinePoly('rect', b, bd.shape === 'pill' ? b.h / 2 : bd.shape === 'rect' && !(bd.corners && bd.corners.on) ? 0 : cornerRadii(bd));
+      const path = tornPath(ctx, bd.torn, P);
+      paintFill(ctx, bd, b, path);
+      if (bd.shape === 'accent') { ctx.shadowColor = 'transparent'; ctx.fillStyle = bd.accentColor; ctx.save(); path(); ctx.clip(); ctx.fillRect(b.x, b.y, bd.accentWidth, b.h); ctx.restore(); }
+      ctx.restore();
+      return;
+    }
     switch (bd.shape) {
       case 'rect': paintFill(ctx, bd, b, bd.corners && bd.corners.on ? rr(b.x, b.y, b.w, b.h, cornerRadii(bd)) : rect(b.x, b.y, b.w, b.h)); break;
       case 'rounded': paintFill(ctx, bd, b, rr(b.x, b.y, b.w, b.h, cornerRadii(bd))); break;
@@ -878,7 +955,45 @@
     }
   }
   // Fills one run of text with the layer's glow (underneath), outline stroke and fill.
+  // Export: text is drawn on whole pixels and then placed at its exact (fractional) position with
+  // drawImage, because browsers snap glyphs to a pixel grid: slow moves would step instead of glide.
+  let subpixelText = false, txtOff = null;
+  const TEXT_PROPS = ['font', 'fillStyle', 'strokeStyle', 'lineWidth', 'lineJoin', 'miterLimit', 'textAlign', 'textBaseline', 'direction', 'letterSpacing', 'wordSpacing', 'fontKerning', 'fontStretch', 'fontVariantCaps', 'textRendering'];
   function paintText(ctx, s, text, x, y) {
+    if (subpixelText && !ctx.__subText) {
+      const m = ctx.getTransform();
+      const fx = m.e - Math.floor(m.e), fy = m.f - Math.floor(m.f);
+      if ((fx > 0.002 || fy > 0.002) && paintTextSubpixel(ctx, s, text, x, y, m, fx, fy)) return;
+    }
+    paintTextRaw(ctx, s, text, x, y);
+  }
+  function paintTextSubpixel(ctx, s, text, x, y, m, fx, fy) {
+    const W = ctx.canvas.width, H = ctx.canvas.height;
+    const w = ctx.measureText(text).width, size = s.size || 40;
+    const pad = size * 0.8 + (s.glow && s.glow.on ? (s.glow.size || 0) * 2 : 0) + (s.stroke && s.stroke.on ? (s.stroke.width || 0) * 2 : 0) + 4;
+    const pts = [[x - w - pad, y - size * 1.6 - pad], [x + w + pad, y - size * 1.6 - pad], [x + w + pad, y + size * 1.6 + pad], [x - w - pad, y + size * 1.6 + pad]]
+      .map(([px, py]) => [m.a * px + m.c * py + m.e, m.b * px + m.d * py + m.f]);
+    const rx = Math.max(0, Math.floor(Math.min(...pts.map((p) => p[0])))), ry = Math.max(0, Math.floor(Math.min(...pts.map((p) => p[1]))));
+    const rx2 = Math.min(W, Math.ceil(Math.max(...pts.map((p) => p[0])))), ry2 = Math.min(H, Math.ceil(Math.max(...pts.map((p) => p[1]))));
+    if (rx2 <= rx || ry2 <= ry) return true; // off screen
+    if (!txtOff) txtOff = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(W, H) : Object.assign(document.createElement('canvas'), { width: W, height: H });
+    if (txtOff.width !== W || txtOff.height !== H) { txtOff.width = W; txtOff.height = H; }
+    const o = txtOff.getContext('2d');
+    o.__subText = true;
+    o.setTransform(1, 0, 0, 1, 0, 0);
+    o.clearRect(rx, ry, rx2 - rx, ry2 - ry);
+    for (const k of TEXT_PROPS) if (k in ctx && k in o) { try { o[k] = ctx[k]; } catch {} }
+    o.shadowColor = 'transparent'; o.shadowBlur = 0; o.globalAlpha = 1; o.filter = 'none'; o.globalCompositeOperation = 'source-over';
+    o.setTransform(m.a, m.b, m.c, m.d, m.e - fx, m.f - fy);
+    paintTextRaw(o, s, text, x, y);
+    // Composite with this context's alpha, shadow, blur filter and clip, shifted by the fraction.
+    ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(txtOff, rx, ry, rx2 - rx, ry2 - ry, rx + fx, ry + fy, rx2 - rx, ry2 - ry);
+    ctx.restore();
+    if (s.stroke && s.stroke.on && s.stroke.width > 0) ctx.shadowColor = 'transparent';
+    return true;
+  }
+  function paintTextRaw(ctx, s, text, x, y) {
     const gl = s.glow, st = s.stroke;
     if (gl && gl.on && gl.size > 0) {
       ctx.save();
@@ -1073,7 +1188,7 @@
 
   // ---------- Extra layers (logo, shapes, more text) ----------
   // state.layers = { id: layer }, state.order = bottom→top list of ids (backdrop/title/subtitle included).
-  const EXTRA_KINDS = { text: 'Text', image: 'Logo / image', shape: 'Shape', group: 'Group' };
+  const EXTRA_KINDS = { text: 'Text', image: 'Logo / image', shape: 'Shape', group: 'Group', controller: 'Controller' };
   const EXTRA_SHAPES = { rect: 'Rectangle', rounded: 'Rounded rectangle', ellipse: 'Circle / ellipse', line: 'Line', path: 'Custom (pen)' };
   function getLayer(state, id) { return id === 'backdrop' || id === 'title' || id === 'subtitle' ? state[id] : state.layers && state.layers[id]; }
   function layerOrder(state) {
@@ -1176,14 +1291,16 @@
         const polys = pathPolys((ly.points || []).map((p) => ({ ...p, x: p.x + b.ox, y: p.y + b.oy })), !!ly.closed, ly.trim);
         const full = !ly.trim || ((ly.trim.start ?? 0) <= 0 && (ly.trim.end ?? 100) >= 100);
         const filled = ly.fill !== false && ly.closed;
-        tracePolys(ctx, polys, ly.closed && full);
+        if (tornOn(ly) && ly.closed && full && polys[0] && polys[0].length > 2) tornPath(ctx, ly.torn, outlinePoly(polys[0].map((p) => (Array.isArray(p) ? p : [p.x, p.y]))))();
+        else tracePolys(ctx, polys, ly.closed && full);
         if (filled) ctx.fill();
         if (ly.stroke && ly.stroke.on && ly.stroke.width > 0) {
           if (filled) ctx.shadowColor = 'transparent';
           ctx.lineWidth = ly.stroke.width; ctx.strokeStyle = ly.stroke.color; ctx.lineCap = ly.stroke.cap || 'round'; ctx.lineJoin = 'round'; ctx.stroke();
         }
       } else {
-        if (ly.shape === 'ellipse') ctx.ellipse(b.x + b.w / 2, b.y + b.h / 2, b.w / 2, b.h / 2, 0, 0, Math.PI * 2);
+        if (tornOn(ly)) tornPath(ctx, ly.torn, ly.shape === 'ellipse' ? outlinePoly('ellipse', b) : outlinePoly('rect', b, ly.shape === 'line' ? b.h / 2 : ly.shape === 'rounded' || (ly.corners && ly.corners.on) ? cornerRadii(ly) : 0))();
+        else if (ly.shape === 'ellipse') ctx.ellipse(b.x + b.w / 2, b.y + b.h / 2, b.w / 2, b.h / 2, 0, 0, Math.PI * 2);
         else if (ly.shape === 'rounded' || ly.shape === 'line' || (ly.corners && ly.corners.on)) roundRectPath(ctx, b.x, b.y, b.w, b.h, ly.shape === 'line' ? b.h / 2 : cornerRadii(ly));
         else ctx.rect(b.x, b.y, b.w, b.h);
         ctx.fill();
@@ -1208,11 +1325,25 @@
     draw(pm);
     ctx.restore();
   }
+  const matteCanvases = [];
+  function matteCanvas(i, w, h) {
+    let c = matteCanvases[i];
+    if (!c) c = matteCanvases[i] = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(w, h) : Object.assign(document.createElement('canvas'), { width: w, height: h });
+    if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+    return c;
+  }
   // ---------- Main render ----------
   function render(ctx, state, t, opts = {}) {
     const base = state;
     curT = t;
     state = resolveAt(state, t);
+    // Motion blur with some layers switched off: those layers stay at the frame's own time
+    // while the others are sampled across the shutter.
+    const fz = opts.freeze && opts.freeze.ids.size ? opts.freeze : null;
+    if (fz) {
+      state = { ...state, layers: { ...(state.layers || {}) } };
+      for (const id of fz.ids) { if (id === 'backdrop' || id === 'title' || id === 'subtitle') state[id] = fz.state[id]; else if (fz.state.layers && fz.state.layers[id]) state.layers[id] = fz.state.layers[id]; }
+    }
     const { width, height, duration } = state.comp;
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -1233,11 +1364,17 @@
     }
     ctx.save();
     if (ds !== 1) { ctx.translate(state.layout.x, state.layout.y); ctx.scale(ds, ds); ctx.translate(-state.layout.x, -state.layout.y); }
-    for (const id of layerOrder(state)) {
+    // Track mattes: a layer can use any other layer's alpha as its mask. The matte layer itself
+    // isn't drawn on its own (as in After Effects' classic behaviour).
+    const order = layerOrder(state);
+    const matteOf = (id) => { const m = (getLayer(state, id) || {}).matte; return m && m.src && m.src !== id && order.includes(m.src) && getLayer(state, m.src) ? m : null; };
+    const usedAsMatte = new Set(order.map(matteOf).filter(Boolean).map((m) => m.src));
+    const drawOne = (ctx, id, force) => {
+      const t = fz && fz.ids.has(id) ? fz.t : t0; curT = t;
       if (id === 'backdrop') {
-        if (bd.type === 'none' || bd.visible === false || hiddenByGroup(state, id, t)) continue;
+        if (bd.type === 'none' || (bd.visible === false && !force) || hiddenByGroup(state, id, t)) return;
         const ph = phaseAt(bd.anim, t, duration);
-        if (!ph.visible) continue;
+        if (!ph.visible) return;
         const type = effType(ph);
         const margin = 200;
         const bb = { x: L.box.x, y: L.box.y, w: L.box.w, h: L.box.h };
@@ -1256,18 +1393,32 @@
           c.restore();
         });
       } else if (id === 'title' || id === 'subtitle') {
-        if (hiddenByGroup(state, id, t)) continue;
+        if (hiddenByGroup(state, id, t)) return;
         const ph = phaseAt(state[id].anim, t, duration);
-        if (!ph.visible || L[id].empty || state[id].visible === false) continue;
+        if (!ph.visible || L[id].empty || (state[id].visible === false && !force)) return;
         withMask(ctx, state, id, (c) => withParents(c, state, L, id, (pm) => drawText(c, pm ? { ...state[id], parentApplied: pm } : state[id], L[id], ph, L, state)));
       } else {
         const ly = state.layers && state.layers[id], eb = L.extras[id];
-        if (!ly || !eb || ly.visible === false || ly.kind === 'group' || hiddenByGroup(state, id, t)) continue;
+        if (!ly || !eb || (ly.visible === false && !force) || ly.kind === 'group' || ly.kind === 'controller' || hiddenByGroup(state, id, t)) return;
         const ph = phaseAt(ly.anim, t, duration);
-        if (!ph.visible) continue;
+        if (!ph.visible) return;
         withMask(ctx, state, ly, (c) => withParents(c, state, L, id, () => drawExtra(c, state, ly, eb, ph, L)));
       }
+    };
+    const t0 = t;
+    for (const id of order) {
+      if (usedAsMatte.has(id)) continue;
+      const m = matteOf(id);
+      if (!m) { drawOne(ctx, id); continue; }
+      const { width: W, height: H } = state.comp;
+      const a = matteCanvas(0, W, H), ac = a.getContext('2d'), mc = matteCanvas(1, W, H), mcx = mc.getContext('2d');
+      for (const c of [ac, mcx]) { c.setTransform(1, 0, 0, 1, 0, 0); c.clearRect(0, 0, W, H); c.setTransform(ctx.getTransform()); }
+      ac.save(); drawOne(ac, id); ac.restore();
+      mcx.save(); drawOne(mcx, m.src, true); mcx.restore();
+      ac.save(); ac.setTransform(1, 0, 0, 1, 0, 0); ac.globalCompositeOperation = m.invert ? 'destination-out' : 'destination-in'; ac.drawImage(mc, 0, 0); ac.restore();
+      ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1; ctx.drawImage(a, 0, 0); ctx.restore();
     }
+    curT = t0;
     ctx.restore();
     void base;
 
@@ -1278,13 +1429,28 @@
   }
 
   // ---------- Motion blur (temporal supersampling) ----------
+  // The part of the frame a rendered sample can touch: every layer's on-screen box plus room for
+  // shadows, glows and blur; the whole frame when unsure.
+  function mbRegion(L, W, H) {
+    const rs = L && L.layers ? Object.values(L.layers).filter(Boolean).map((b) => screenRect(b)).filter((r) => [r.x, r.y, r.w, r.h].every(Number.isFinite)) : [];
+    if (!rs.length) return { x: 0, y: 0, w: W, h: H };
+    const pad = Math.round(Math.max(W, H) * 0.08) + 40;
+    const x = Math.max(0, Math.floor(Math.min(...rs.map((r) => r.x)) - pad)), y = Math.max(0, Math.floor(Math.min(...rs.map((r) => r.y)) - pad));
+    const x2 = Math.min(W, Math.ceil(Math.max(...rs.map((r) => r.x + r.w)) + pad)), y2 = Math.min(H, Math.ceil(Math.max(...rs.map((r) => r.y + r.h)) + pad));
+    return { x, y, w: Math.max(0, x2 - x), h: Math.max(0, y2 - y) };
+  }
   // Renders several sub-frames across the shutter interval and averages them in premultiplied
   // space by drawing each at 1/N alpha with additive ('lighter') compositing.
   let mbCanvas = null;
   function renderFrame(ctx, state, t, opts = {}) {
+    subpixelText = !!opts.precise;
     const mb = state.comp.motionBlur;
     const samples = Math.round(opts.samples || (mb && mb.samples) || 8);
     if (!mb || !mb.enabled || opts.noMotionBlur || samples < 2 || !(mb.shutter > 0)) return render(ctx, state, t, opts);
+    // Each layer's motion blur switch (on unless switched off). Layers with it off stay sharp.
+    const ids = layerOrder(state), off = new Set(ids.filter((id) => (getLayer(state, id) || {}).motionBlur === false));
+    if (ids.every((id) => off.has(id) || !getLayer(state, id))) return render(ctx, state, t, opts);
+    const freeze = off.size ? { ids: off, t, state: resolveAt(state, t) } : null;
     const { width: W, height: H, fps } = state.comp;
     if (!mbCanvas) mbCanvas = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(W, H) : Object.assign(document.createElement('canvas'), { width: W, height: H });
     if (mbCanvas.width !== W || mbCanvas.height !== H) { mbCanvas.width = W; mbCanvas.height = H; }
@@ -1293,24 +1459,46 @@
     const sampleT = (i) => Math.max(0, Math.min(state.comp.duration, t - span / 2 + (span * (i + 0.5)) / samples));
     if (opts.precise) {
       // Export quality: accumulate in floating point (premultiplied) to avoid banding.
+      // Only the area the design covers is read back and averaged (a lower third is mostly empty).
       const sctx = mbCanvas.getContext('2d', { willReadFrequently: true });
-      const acc = new Float32Array(W * H * 4);
+      const frames = [];
+      // In/Out animations move layers outside their layout boxes, so while any is running the
+      // whole frame is used; during holds only the area the design covers.
+      const moving = ids.some((id) => { const l = getLayer(state, id); if (!l || !l.anim) return false; return [sampleT(0), t, sampleT(samples - 1)].some((tt) => { const ph = phaseAt(l.anim, tt, state.comp.duration); return ph.phase === 'in' || ph.phase === 'out'; }); });
       for (let i = 0; i < samples; i++) {
-        render(sctx, state, sampleT(i), { guides: false });
-        const d = sctx.getImageData(0, 0, W, H).data;
-        for (let j = 0; j < d.length; j += 4) {
-          const a = d[j + 3];
-          if (!a) continue;
-          acc[j] += d[j] * a; acc[j + 1] += d[j + 1] * a; acc[j + 2] += d[j + 2] * a; acc[j + 3] += a;
+        const L = render(sctx, state, sampleT(i), { guides: false, freeze });
+        // Read each sample right away (the canvas is reused for the next one).
+        const r = moving ? { x: 0, y: 0, w: W, h: H } : mbRegion(L, W, H);
+        frames.push({ r, d: r.w > 0 && r.h > 0 ? sctx.getImageData(r.x, r.y, r.w, r.h).data : null });
+      }
+      // Union of the sampled regions.
+      let x0 = W, y0 = H, x1 = 0, y1 = 0;
+      for (const f of frames) if (f.d) { x0 = Math.min(x0, f.r.x); y0 = Math.min(y0, f.r.y); x1 = Math.max(x1, f.r.x + f.r.w); y1 = Math.max(y1, f.r.y + f.r.h); }
+      ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, W, H);
+      if (x1 > x0 && y1 > y0) {
+        const RW = x1 - x0, RH = y1 - y0;
+        const acc = new Float32Array(RW * RH * 4);
+        for (const f of frames) {
+          if (!f.d) continue;
+          const { r, d } = f;
+          for (let yy = 0; yy < r.h; yy++) {
+            let j = yy * r.w * 4, k = ((yy + r.y - y0) * RW + (r.x - x0)) * 4;
+            for (let xx = 0; xx < r.w; xx++, j += 4, k += 4) {
+              const a = d[j + 3];
+              if (!a) continue;
+              acc[k] += d[j] * a; acc[k + 1] += d[j + 1] * a; acc[k + 2] += d[j + 2] * a; acc[k + 3] += a;
+            }
+          }
         }
+        const out = ctx.createImageData(RW, RH), o = out.data;
+        for (let j = 0; j < o.length; j += 4) {
+          const a = acc[j + 3];
+          if (!a) continue;
+          o[j] = acc[j] / a; o[j + 1] = acc[j + 1] / a; o[j + 2] = acc[j + 2] / a; o[j + 3] = a / samples;
+        }
+        ctx.putImageData(out, x0, y0);
       }
-      const out = ctx.createImageData(W, H), o = out.data;
-      for (let j = 0; j < o.length; j += 4) {
-        const a = acc[j + 3];
-        if (!a) continue;
-        o[j] = acc[j] / a; o[j + 1] = acc[j + 1] / a; o[j + 2] = acc[j + 2] / a; o[j + 3] = a / samples;
-      }
-      ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.putImageData(out, 0, 0); ctx.restore();
+      ctx.restore();
       curT = t;
       return layoutAt(ctx, resolveAt(state, t));
     }
@@ -1320,7 +1508,7 @@
     ctx.globalCompositeOperation = 'lighter';
     ctx.globalAlpha = 1 / samples;
     for (let i = 0; i < samples; i++) {
-      render(sc, state, sampleT(i), { guides: false });
+      render(sc, state, sampleT(i), { guides: false, freeze });
       ctx.drawImage(mbCanvas, 0, 0);
     }
     ctx.restore();
@@ -1415,6 +1603,23 @@
       ctx.textAlign = 'right';
       ctx.fillText('Action safe 93%', W * 0.965 - 8 * lw, H * 0.035 + 18 * lw);
       ctx.textAlign = 'left';
+    }
+    // Controllers: never rendered, shown in the preview as a red square with a crosshair.
+    for (const [id, ly] of Object.entries(state.layers || {})) {
+      const b = L.layers[id];
+      if (ly.kind !== 'controller' || ly.visible === false || !b) continue;
+      ctx.save();
+      for (const f of b.parents || []) applyLayerTransform(ctx, f.tr, f.b, false);
+      if (ly.transform) applyLayerTransform(ctx, ly.transform, b, false);
+      const cx = b.x + b.w / 2, cy = b.y + b.h / 2, col = ly.label || '#ef4444';
+      for (const [c, w] of [['rgba(0,0,0,0.6)', 3.5 * lw], [col, 1.6 * lw]]) {
+        ctx.strokeStyle = c; ctx.lineWidth = w;
+        ctx.strokeRect(b.x, b.y, b.w, b.h);
+        ctx.beginPath(); ctx.moveTo(cx - b.w * 0.3, cy); ctx.lineTo(cx + b.w * 0.3, cy); ctx.moveTo(cx, cy - b.h * 0.3); ctx.lineTo(cx, cy + b.h * 0.3); ctx.stroke();
+      }
+      ctx.font = `600 ${11 * lw}px sans-serif`; ctx.fillStyle = col;
+      ctx.fillText(ly.name || 'Controller', b.x, b.y + b.h + 14 * lw);
+      ctx.restore();
     }
     if (opts.selected && L.layers[opts.selected]) {
       const b = L.layers[opts.selected];

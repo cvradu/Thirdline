@@ -83,7 +83,24 @@
     'Playfair Display': [400, 500, 600, 700, 800, 900],
     'DM Serif Display': [400],
   };
-  const SYSTEM_FONTS = ['Arial', 'Helvetica', 'Georgia', 'Times New Roman', 'Verdana', 'Trebuchet MS', 'Impact', 'Courier New'];
+  let SYSTEM_FONTS = ['Arial', 'Helvetica', 'Georgia', 'Times New Roman', 'Verdana', 'Trebuchet MS', 'Impact', 'Courier New'];
+  // Every font installed on this computer (Local Font Access): usable by name, no import needed.
+  let localFontsScanned = false;
+  async function scanLocalFonts(quiet = true) {
+    if (localFontsScanned || typeof window.queryLocalFonts !== 'function') return false;
+    try {
+      const list = await window.queryLocalFonts();
+      const fams = [...new Set(list.map((f) => f.family).filter((f) => f && !f.startsWith('.')))].sort((a, b) => a.localeCompare(b));
+      if (!fams.length) return false;
+      SYSTEM_FONTS = fams; localFontsScanned = true;
+      if (typeof syncControls === 'function') syncControls();
+      if (!quiet) toast(`${fams.length} fonts found on this computer`);
+      return true;
+    } catch { return false; }
+  }
+  scanLocalFonts();
+  // Some systems only allow the scan after a click.
+  document.addEventListener('pointerdown', () => { if (!localFontsScanned) scanLocalFonts(); }, { capture: true });
   const userFonts = []; // {family, file}
 
   async function addUserFont(f) {
@@ -174,14 +191,15 @@
   const pp = (k) => (isExtra(k) ? `layers.${k}` : k); // path prefix of a layer
   const lay = (k) => Engine.getLayer(state, k);
   const pathLayer = (p) => { const a = p.split('.'); return a[0] === 'layers' ? a[1] : a[0]; };
-  const KIND_COLOR = { text: '#a78bfa', image: '#ec4899', shape: '#ef4444', group: '#94a3b8' };
+  const KIND_COLOR = { text: '#a78bfa', image: '#ec4899', shape: '#ef4444', group: '#94a3b8', controller: '#ef4444' };
   function layerName(k) {
     if (LAYER_NAMES[k]) return LAYER_NAMES[k];
     const l = state.layers && state.layers[k];
     return l ? (l.name || Engine.EXTRA_KINDS[l.kind] || 'Layer') : k;
   }
   function layerColor(k) {
-    const l = state.layers && state.layers[k];
+    const l = state.layers && state.layers[k], own = Engine.getLayer(state, k);
+    if (own && own.label) return own.label;
     if (l && l.kind === 'shape' && /^#[0-9a-f]{6}$/i.test(l.color || '')) return l.color;
     return { backdrop: '#3b82f6', title: '#f59e0b', subtitle: '#22c55e' }[k] || (l ? KIND_COLOR[l.kind] || '#a78bfa' : null);
   }
@@ -571,7 +589,7 @@
   const fontOptions = () => [
     { group: 'Built-in', items: Object.keys(BUILTIN_FONTS).map((f) => [f, f]) },
     ...(userFonts.length ? [{ group: 'My fonts', items: userFonts.map((f) => [f.family, f.family]) }] : []),
-    { group: 'System', items: SYSTEM_FONTS.map((f) => [f, f]) },
+    { group: localFontsScanned ? `On this computer (${SYSTEM_FONTS.length})` : 'System', items: SYSTEM_FONTS.filter((f) => !BUILTIN_FONTS[f] && !userFonts.some((u) => u.family === f)).map((f) => [f, f]) },
   ];
   const weightOptions = (key) => () => {
     const fam = lay(key).font;
@@ -584,13 +602,13 @@
 
   async function uploadFont(key) {
     const fonts = await api.fonts.import();
-    let last = null;
-    for (const f of fonts) last = (await addUserFont(f)) || last;
+    let last = null, n = 0;
+    for (const f of fonts) { const fam = await addUserFont(f); if (fam) { last = fam; n++; } }
     if (last) {
       lay(key).font = last;
       lay(key).weight = 400;
       changed({ sync: true });
-      toast(`Font “${last}” added`);
+      toast(n > 1 ? `${n} fonts added · using “${last}”` : `Font “${last}” added`);
     }
   }
 
@@ -617,7 +635,8 @@
       row({ label: 'Text', type: 'text', path: p('text'), placeholder: textual ? 'Name' : 'Role / description' }),
       row({ label: 'Font', type: 'select', path: p('font'), options: fontOptions,
         onSet: () => { const ws = BUILTIN_FONTS[lay(key).font]; if (ws && !ws.includes(+lay(key).weight)) lay(key).weight = ws.reduce((a, b) => (Math.abs(b - lay(key).weight) < Math.abs(a - lay(key).weight) ? b : a)); syncControls(); },
-        extra: () => [el('button', { type: 'button', title: 'Upload a .ttf/.otf/.woff font', onclick: () => uploadFont(key) }, 'Upload…')] }),
+        extra: () => [el('button', { type: 'button', title: 'Add .ttf/.otf/.woff fonts (you can pick several). Fonts installed on this computer are already in the list.', onclick: () => uploadFont(key) }, 'Upload…'),
+          api.fonts.openManager ? el('button', { type: 'button', class: 'ghost', title: 'Open Font Book to install or manage fonts; installed fonts show up in this list', onclick: async () => { const ok = await api.fonts.openManager(); if (!ok) toast('Could not open the font manager'); else { localFontsScanned = false; setTimeout(() => window.addEventListener('focus', () => scanLocalFonts(false), { once: true }), 500); } } }, 'Font Book') : null].filter(Boolean) }),
       row({ label: 'Weight', type: 'select', path: p('weight'), options: weightOptions(key), numeric: true }),
       row({ label: 'Size', type: 'range', path: p('size'), key: true, min: 8, max: 220, unit: 'px' }),
       row({ label: 'Color', type: 'color', path: p('color'), key: true }),
@@ -778,6 +797,7 @@
         row({ label: 'Opacity', type: 'range', path: 'backdrop.opacity', key: true, min: 0, max: 100, scale: 100, unit: '%', show: (s) => s.backdrop.type !== 'none' }),
         row({ label: 'Corner radius', type: 'range', path: 'backdrop.radius', key: true, min: 0, max: 80, unit: 'px', show: (s) => shapeIn('rounded', 'accent', 'twoTone')(s) && !(s.backdrop.corners && s.backdrop.corners.on) }),
         ...cornerRows('backdrop', shapeIn('rect', 'rounded', 'accent')),
+        ...tornRows('backdrop', shapeIn('rect', 'rounded', 'pill', 'slant', 'accent')),
         row({ label: 'Slant', type: 'range', path: 'backdrop.skew', key: true, min: 0, max: 120, unit: 'px', show: shapeIn('slant') }),
       ]),
       section('Image backdrop', [
@@ -960,6 +980,19 @@
   }
 
   // Each corner on its own (one rounded corner, two, …). base = path of the object holding radius/corners.
+  // Torn paper: rough, ripped edges with an optional paper rim showing underneath.
+  function tornRows(base, show) {
+    const on = (s) => show(s) && !!getPath(state, `${base}.torn.on`);
+    return [
+      row({ label: 'Torn paper', type: 'checkbox', path: `${base}.torn.on`, text: 'Ripped edges', show,
+        onSet: (v) => { if (v && getPath(state, `${base}.torn.amount`) == null) setPath(state, `${base}.torn`, { on: true, amount: 12, size: 40, edge: 5, paperColor: '#f4efe6', seed: 1 }); changed({ sync: true }); } }),
+      row({ label: 'Roughness', type: 'range', path: `${base}.torn.amount`, key: true, min: 0, max: 60, unit: 'px', show: on }),
+      row({ label: 'Tear size', type: 'range', path: `${base}.torn.size`, min: 4, max: 200, unit: 'px', show: on }),
+      row({ label: 'Paper rim', type: 'range', path: `${base}.torn.edge`, key: true, min: 0, max: 30, unit: 'px', show: on }),
+      row({ label: 'Paper colour', type: 'color', path: `${base}.torn.paperColor`, show: (s) => on(s) && (getPath(state, `${base}.torn.edge`) || 0) > 0 }),
+      row({ label: 'Variation', type: 'range', path: `${base}.torn.seed`, min: 1, max: 50, show: on }),
+    ];
+  }
   function cornerRows(base, show, label = 'Corners') {
     const on = (s) => show(s) && !!getPath(state, `${base}.corners.on`);
     const c = (k, l) => row({ label: l, type: 'range', path: `${base}.corners.${k}`, key: true, min: 0, max: 200, unit: 'px', show: on });
@@ -999,12 +1032,14 @@
       el('div', { class: 'row' }, el('label', {}, 'Parent'), parentPicker(key)),
       el('div', { class: 'row', title: 'Shift-click layers in the list or the preview to align several' }, el('label', {}, 'Align'), alignRow()),
       row({ label: 'Scale', type: 'range', path: tp('scale'), key: true, min: 0, max: 400, unit: '%' }),
+      row({ label: 'Width', type: 'range', path: tp('scaleX'), key: true, min: 0, max: 400, unit: '%', title: 'Stretch or squash horizontally only (on top of Scale). Drag the side handles in the preview too.' }),
+      row({ label: 'Height', type: 'range', path: tp('scaleY'), key: true, min: 0, max: 400, unit: '%', title: 'Stretch or squash vertically only (on top of Scale). Drag the top or bottom handles in the preview too.' }),
       row({ label: 'Rotation', type: 'range', path: tp('rotation'), key: true, min: -360, max: 360, step: 0.5, unit: '°' }),
       row({ label: 'Opacity', type: 'range', path: tp('opacity'), key: true, min: 0, max: 100, unit: '%' }),
       row({ label: 'Blur', type: 'range', path: tp('blur'), key: true, min: 0, max: 60, step: 0.5, unit: 'px' }),
       !isText ? null : row({ label: 'Tracking', type: 'range', path: tp('tracking'), key: true, min: -20, max: 120, step: 0.5, unit: 'px' }),
       row({ label: '', type: 'buttons', buttons: [
-        ['Reset transform', () => { clearKeys(`${pp(key)}.transform.`); Object.assign(lay(key).transform, { x: 0, y: 0, scale: 100, rotation: 0, opacity: 100, blur: 0, anchorX: 50, anchorY: 50, ...(!isText ? {} : { tracking: 0 }) }); changed({ sync: true }); }],
+        ['Reset transform', () => { clearKeys(`${pp(key)}.transform.`); Object.assign(lay(key).transform, { x: 0, y: 0, scale: 100, scaleX: 100, scaleY: 100, rotation: 0, opacity: 100, blur: 0, anchorX: 50, anchorY: 50, ...(!isText ? {} : { tracking: 0 }) }); changed({ sync: true }); }],
         ['Remove all keyframes', () => { clearKeys(`${pp(key)}.`); changed({ sync: true }); toast(`All ${name} keyframes removed`); }, 'Removes keyframes on every property of this layer (values stay as they are now)'],
       ] }),
     ].filter(Boolean));
@@ -1324,6 +1359,19 @@
   function extraPane(id) {
     const ly = lay(id), p = (k) => `layers.${id}.${k}`;
     let content;
+    if (ly.kind === 'controller') {
+      const [transform] = animPanel(id);
+      const kids = () => Engine.layerOrder(state).filter((k) => (lay(k) || {}).parent === id);
+      return [inspHead(id), section('Controller', [
+        el('div', { class: 'sub' }, 'A controller is invisible in exports. Parent layers to it (Parent menu in the bar above the preview) and they move, scale and rotate with it. Animate its transform to drive them all.'),
+        row({ label: '', type: 'buttons', buttons: [['Parent selected layers to this', () => {
+          const ids = multiSel.filter((k) => k !== id && !descendantsOf(k).has(id));
+          if (!ids.length) return toast('Shift-click layers in the timeline or layer list first, with this controller selected last');
+          ids.forEach((k) => setParent(k, id)); changed({ sync: true }); toast(`${ids.length} layer${ids.length > 1 ? 's' : ''} now follow ${layerName(id)}`);
+        }, 'Select layers, then this controller, and click to parent them all to it']] }),
+        row({ label: 'Following', type: 'custom', render: (ctl) => { const s = el('span', { class: 'muted' }); ctl.append(s); return () => { const k = kids(); s.textContent = k.length ? k.map(layerName).join(', ') : 'No layers yet'; }; } }),
+      ]), transform].filter(Boolean).map(foldable).map(tagTab).flatMap((x, i) => (i === 0 ? [x, inspTabs()] : [x]));
+    }
     if (ly.kind === 'group') {
       const a = animPanel(id);
       const [transform, , ...rest] = a; // groups have no mask of their own
@@ -1351,6 +1399,7 @@
       row({ label: '', type: 'custom', show: () => !isPathLayer(id), render: (ctl) => { ctl.append(el('span', { class: 'sub', style: 'margin:0' }, 'Width or height 0 = match the lower third box.')); } }),
       row({ label: 'Corner radius', type: 'range', path: p('radius'), key: true, min: 0, max: 200, unit: 'px', show: () => lay(id) && lay(id).shape === 'rounded' && !lay(id).corners?.on }),
       ...cornerRows(`layers.${id}`, () => lay(id) && ['rect', 'rounded'].includes(lay(id).shape)),
+      ...tornRows(`layers.${id}`, () => !!lay(id) && lay(id).kind === 'shape' && (lay(id).shape !== 'path' || !!lay(id).closed)),
       ...pathRows(id, false, () => isPathLayer(id)),
       row({ label: 'Opacity', type: 'range', path: p('opacity'), key: true, min: 0, max: 100, scale: 100, unit: '%' }),
       row({ label: 'Stroke', type: 'checkbox', path: p('stroke.on'), text: 'On' }),
@@ -1395,7 +1444,7 @@
   }
 
   // ---------- Layers panel & animation library (Advanced) ----------
-  const KIND_ICON = { text: 'T', image: '▣', shape: '■', group: '❒' };
+  const KIND_ICON = { text: 'T', image: '▣', shape: '■', group: '❒', controller: '⊞' };
   let dragLayer = null;
   let layerSig = '';
   function renderLayerList() {
@@ -1480,10 +1529,17 @@
   async function addLayer(what) {
     if (what === 'group') return groupSelection();
     let ly;
+    if (what === 'controller') {
+      ly = Presets.newLayer('shape', { name: `Controller ${Object.values(state.layers || {}).filter((l) => l.kind === 'controller').length + 1}`, w: 80, h: 80, attach: 'frame', ax: 0.5, ay: 0.5, x: 0, y: 0 });
+      Object.assign(ly, { kind: 'controller' }); delete ly.shape;
+      ly.anim.in.type = 'none'; ly.anim.out.type = 'none';
+    } else
     if (what === 'text') ly = Presets.newLayer('text', { text: 'NEW TEXT', size: 22, weight: 700, color: state.backdrop.accentColor || '#f59e0b', letterSpacing: 2, y: -12, ax: 0, ay: 0, name: 'Text' });
     else if (what === 'image') {
       const f = await pickFile('image/*'); if (!f) return;
-      ly = Presets.newLayer('image', { src: await fileToDataURL(f), file: f.name, name: f.name.replace(/\.[^.]+$/, '') });
+      const src = await fileToDataURL(f);
+      if (!(state.assets || []).some((a) => a.src === src)) state.assets = [...(state.assets || []), { id: newId(), name: f.name, src }];
+      ly = Presets.newLayer('image', { src, file: f.name, name: f.name.replace(/\.[^.]+$/, '') });
     } else if (what === 'line') ly = Presets.newLayer('shape', { shape: 'line', w: 0, h: 4, ax: 0, ay: 1, y: 10, x: 0, name: 'Line', color: state.backdrop.accentColor || '#f59e0b', anim: { in: { type: 'growX' }, out: { type: 'growX' } } });
     else if (what === 'ellipse') ly = Presets.newLayer('shape', { shape: 'ellipse', w: 26, h: 26, ax: 1, ay: 0.5, x: 44, name: 'Dot', color: '#22c55e', anim: { in: { type: 'pop', easing: 'easeOutBack' }, out: { type: 'scale' } } });
     else if (what === 'rect') ly = Presets.newLayer('shape', { shape: 'rounded', w: 140, h: 44, radius: 8, ax: 1, ay: 0, x: 16, name: 'Box', color: state.backdrop.accentColor || '#f59e0b', anim: { in: { type: 'wipeRight' }, out: { type: 'wipeLeft' } } });
@@ -1508,9 +1564,80 @@
     document.querySelectorAll('#leftTabs [data-ltab]').forEach((b) => b.classList.toggle('on', b.dataset.ltab === t));
     document.querySelectorAll('#advLeft [data-lpane]').forEach((p) => { p.hidden = p.dataset.lpane !== t; });
     if (t === 'styles') refreshGallery();
+    if (t === 'assets' && typeof renderAssets === 'function') renderAssets();
     try { localStorage.setItem('thirdline:leftTab', t); } catch {}
   }
   document.querySelectorAll('#leftTabs [data-ltab]').forEach((b) => b.addEventListener('click', () => setLeftTab(b.dataset.ltab)));
+  // ---------- Assets: everything imported into the project, ready to use ----------
+  const ASSET_TYPES = /^image\/(png|jpe?g|svg\+xml|webp|gif)$/i;
+  function allAssets() {
+    // Imported assets, plus any image already used by a layer (so nothing goes missing from the list).
+    const list = [...(state.assets || [])];
+    for (const ly of Object.values(state.layers || {})) if (ly.kind === 'image' && ly.src && !list.some((a) => a.src === ly.src)) list.push({ id: `used-${list.length}`, name: ly.file || ly.name || 'Image', src: ly.src, derived: true });
+    return list;
+  }
+  const assetUses = (a) => Object.values(state.layers || {}).filter((l) => l.kind === 'image' && l.src === a.src).length;
+  async function importAssets(files) {
+    const ok = [...files].filter((f) => ASSET_TYPES.test(f.type));
+    if (!ok.length) return toast('Only images can be imported (PNG, JPG, SVG, WebP, GIF)');
+    state.assets = [...(state.assets || [])];
+    for (const f of ok) {
+      const src = await fileToDataURL(f);
+      if (state.assets.some((a) => a.src === src)) continue;
+      state.assets.push({ id: newId(), name: f.name, src });
+    }
+    changed({ sync: true }); renderAssets();
+    toast(`${ok.length} asset${ok.length > 1 ? 's' : ''} imported`);
+    if (ok.length < files.length) toast('Some files were skipped (only images can be imported)');
+  }
+  function addAssetLayer(a, at) {
+    const ly = Presets.newLayer('image', { src: a.src, file: a.name, name: a.name.replace(/\.[^.]+$/, '') });
+    const id = newId();
+    state.layers = { ...(state.layers || {}), [id]: ly };
+    state.order = [...Engine.layerOrder(state).filter((x) => x !== id), id];
+    changed({ sync: true });
+    if (at) {
+      // Dropped on the preview: centre it under the pointer.
+      requestAnimationFrame(() => { const b = lastLayout && lastLayout.layers && lastLayout.layers[id]; if (b) { ly.x = Math.round((ly.x || 0) + at[0] - (b.x + b.w / 2)); ly.y = Math.round((ly.y || 0) + at[1] - (b.y + b.h / 2)); changed({ sync: true }); } });
+    }
+    selectLayer(id); renderAssets();
+  }
+  let assetSig = '';
+  function renderAssets() {
+    const grid = $('#assetGrid'); if (!grid) return;
+    const list = allAssets();
+    const sig = list.map((a) => a.id + ':' + assetUses(a)).join('|');
+    if (sig === assetSig && grid.childElementCount) return;
+    assetSig = sig; grid.innerHTML = '';
+    if (!list.length) { grid.append(el('div', { class: 'asset-empty' }, 'No assets yet. Click + Import or drop images here.')); return; }
+    for (const a of list) {
+      const n = assetUses(a);
+      const card = el('div', { class: 'asset', draggable: 'true', title: `${a.name}${n ? ` · used by ${n} layer${n > 1 ? 's' : ''}` : ''}\nClick to add as a layer · drag onto the preview`, onclick: () => addAssetLayer(a) },
+        el('div', { class: 'asset-th' }, el('img', { src: a.src, alt: '' })), el('div', { class: 'asset-nm' }, a.name), n ? el('span', { class: 'asset-n' }, String(n)) : null);
+      card.addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/x-thirdline-asset', a.src); e.dataTransfer.setData('text/plain', a.name); e.dataTransfer.effectAllowed = 'copy'; });
+      card.addEventListener('contextmenu', (e) => {
+        e.preventDefault(); ctxMenu.innerHTML = ''; ctxMenu.append(el('div', { class: 'ctx-title' }, a.name));
+        menuItem('Add as a layer', () => addAssetLayer(a));
+        menuItem(selected && lay(selected) && lay(selected).kind === 'image' ? `Use for ${layerName(selected)}` : 'Use for the selected image layer', () => { lay(selected).src = a.src; lay(selected).file = a.name; changed({ sync: true }); renderAssets(); }, { disabled: !(selected && lay(selected) && lay(selected).kind === 'image') });
+        menuSep();
+        menuItem(a.derived ? 'Used by a layer (delete the layer to remove)' : n ? 'Remove from assets (layers keep it)' : 'Remove from assets', () => { state.assets = (state.assets || []).filter((x) => x.id !== a.id); changed({ sync: true }); renderAssets(); }, { disabled: !!a.derived });
+        placeMenu(e.clientX, e.clientY);
+      });
+      grid.append(card);
+    }
+  }
+  $('#btnImportAssets').addEventListener('click', () => { const i = el('input', { type: 'file', accept: 'image/*', multiple: '' }); i.onchange = () => i.files.length && importAssets(i.files); i.click(); });
+  const assetPane = document.querySelector('[data-lpane="assets"]');
+  assetPane.addEventListener('dragover', (e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); assetPane.classList.add('drop'); } });
+  assetPane.addEventListener('dragleave', () => assetPane.classList.remove('drop'));
+  assetPane.addEventListener('drop', (e) => { assetPane.classList.remove('drop'); if (e.dataTransfer.files.length) { e.preventDefault(); e.stopPropagation(); importAssets(e.dataTransfer.files); } });
+  $('#preview').addEventListener('dragover', (e) => { if (e.dataTransfer.types.includes('text/x-thirdline-asset')) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } });
+  $('#preview').addEventListener('drop', (e) => {
+    const src = e.dataTransfer.getData('text/x-thirdline-asset'); if (!src) return;
+    e.preventDefault(); e.stopPropagation();
+    const a = allAssets().find((x) => x.src === src); if (a) addAssetLayer(a, toComp(e));
+  });
+  addStructureSync(renderAssets);
   try { const t = localStorage.getItem('thirdline:leftTab'); if (t) setLeftTab(t); } catch {}
   // View menu (preview background, guides)
   $('#btnView').onclick = (e) => { e.stopPropagation(); $('#viewMenu').hidden = !$('#viewMenu').hidden; };
@@ -1722,7 +1849,27 @@
 
     // Step 3: look
     const fontSel = el('select', { style: 'width:100%' });
-    fillSelect(fontSel, [...FONT_PAIRS.map(([a, b], i) => [String(i), a === b ? a : `${a} + ${b}`]), ['custom', 'Custom (set in Advanced)']]);
+    fillSelect(fontSel, [...FONT_PAIRS.map(([a, b], i) => [String(i), a === b ? a : `${a} + ${b}`]), ['custom', 'Your own choice (below)']]);
+    // Pick each font yourself: built-in, your uploaded fonts and every font on this computer.
+    const fontPick = (key) => {
+      const sel = el('select', { style: 'width:100%' });
+      let sig = '';
+      sel.addEventListener('change', () => { const f = sel.value; Object.assign(state[key], { font: f, weight: BUILTIN_FONTS[f] ? bestWeight(f, +state[key].weight || 400) : +state[key].weight || 400 }); changed({ sync: true }); queueGallery(); });
+      bind(() => {
+        const opts = fontOptions(), cur = state[key].font;
+        if (!opts.some((g) => g.items.some(([v]) => v === cur))) opts.push({ group: 'In this project', items: [[cur, cur]] });
+        const sg = opts.map((g) => g.group + g.items.length).join('|') + cur;
+        if (sg !== sig) { sig = sg; fillSelect(sel, opts); }
+        if (document.activeElement !== sel) sel.value = cur;
+      });
+      return sel;
+    };
+    const fontRow = el('div', { class: 'two' },
+      el('div', {}, el('label', { class: 'l' }, 'Name font'), fontPick('title')),
+      el('div', {}, el('label', { class: 'l' }, 'Title font'), fontPick('subtitle')));
+    const fontBtns = el('div', { class: 'font-btns' },
+      el('button', { type: 'button', class: 'ghost', title: 'Add .ttf/.otf/.woff font files (several at once). Fonts installed on this computer are already in the lists.', onclick: () => uploadFont('title') }, 'Add font files…'),
+      api.fonts && api.fonts.openManager ? el('button', { type: 'button', class: 'ghost', title: 'Open Font Book; fonts installed there show up in these lists', onclick: async () => { if (await api.fonts.openManager()) { localFontsScanned = false; window.addEventListener('focus', () => scanLocalFonts(false), { once: true }); } } }, 'Font Book') : null);
     fontSel.addEventListener('change', () => {
       if (fontSel.value === 'custom') return;
       const [a, b] = FONT_PAIRS[+fontSel.value];
@@ -1756,7 +1903,7 @@
     for (const [k, title] of POS9) grid.append(el('button', { type: 'button', title, 'data-v': k, onclick: () => { state.ui.pos = k; placeAt(k); } }));
     bind(() => grid.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === state.ui.pos)));
     const step3 = el('div', { class: 'step' }, el('h3', {}, el('b', {}, '3'), 'Look'),
-      el('label', { class: 'l' }, 'Font'), fontSel, el('label', { class: 'l' }, 'Colours'), swatches,
+      el('label', { class: 'l' }, 'Font pairing'), fontSel, fontRow, fontBtns, el('label', { class: 'l' }, 'Colours'), swatches,
       el('div', { class: 'two' }, el('div', {}, el('label', { class: 'l' }, 'Size'), sizeSeg), el('div', {}, el('label', { class: 'l' }, 'Position'), grid)));
 
     // Step 4: motion
@@ -2024,6 +2171,7 @@
       Object.assign(next.layout, { x: state.layout.x, y: state.layout.y, hAnchor: state.layout.hAnchor, vAnchor: state.layout.vAnchor });
       if (state.backdrop.image.src && next.backdrop.type !== 'image') next.backdrop.image = clone(state.backdrop.image);
       next.layers = clone(state.layers || {}); next.order = clone(state.order || next.order);
+      if (state.assets) next.assets = clone(state.assets);
       next.ui = { ...clone(state.ui), motion: '', speed: 'normal', size: 'M', style: it.builtin };
       const hold = holdSeconds();
       replaceState(next);
@@ -2175,6 +2323,8 @@
   let spaceHeld = false, spacePanned = false, panDrag = null;
   viewport.addEventListener('pointerdown', (e) => {
     if (!(spaceHeld || e.button === 1 || (tool === 'hand' && e.button === 0))) return;
+    // Buttons and menus that sit over the preview (tool rail, zoom, align) stay clickable.
+    if (e.target !== viewport && e.target.closest && e.target.closest('button, input, select, label, a, .toolrail, .menu, [role="menu"]')) return;
     e.preventDefault(); e.stopImmediatePropagation();
     if (pview.z === 'fit') { pview.z = fitScale(); }
     panDrag = { x: e.clientX, y: e.clientY, px: pview.px, py: pview.py };
@@ -2282,14 +2432,22 @@
   new ResizeObserver(() => { if (advanced && panelLayout.tlh) resizeTimeline(); }).observe($('#tlScroll'));
   applyLayout();
 
+  // Clean preview: hide every box, handle, guide and path so you see only the animation.
+  let cleanView = false;
+  $('#btnClean').addEventListener('click', () => setClean(!cleanView));
+  function setClean(on) {
+    cleanView = !!on;
+    const b = $('#btnClean'); if (b) { b.classList.toggle('on', cleanView); b.title = cleanView ? 'Show boxes, handles and guides again (` or Shift+Cmd/Ctrl+H)' : 'Clean preview: hide boxes, handles and guides (` or Shift+Cmd/Ctrl+H)'; }
+    document.body.classList.toggle('clean-view', cleanView);
+    drawPreview();
+  }
   function drawPreview() {
     noteLayout();
     if (preview.width !== state.comp.width || preview.height !== state.comp.height) { preview.width = state.comp.width; preview.height = state.comp.height; fitFrame(); }
     const mb = state.comp.motionBlur;
     const mbOpts = mb && mb.enabled && mb.preview && !dragging ? { samples: Math.min(mb.samples, playing ? 4 : 8) } : { noMotionBlur: true };
-    lastLayout = Engine.renderFrame(pctx, state, time, { guides: true, safeAreas: view.safeAreas, bounds: view.bounds || dragging, selected, also: advanced && multiSel.length > 1 ? multiSel : null, anchor: advanced, ...mbOpts });
-    if (advanced && selected) drawMotionPath();
-    drawPenOverlay();
+    lastLayout = Engine.renderFrame(pctx, state, time, { guides: !cleanView, safeAreas: view.safeAreas, bounds: view.bounds || dragging, selected, also: advanced && multiSel.length > 1 ? multiSel : null, anchor: advanced, ...mbOpts });
+    if (!cleanView) { if (advanced && selected) drawMotionPath(); drawPenOverlay(); drawHandles(); }
     const fps = state.comp.fps;
     const f = Math.round(time * fps);
     $('#timecode').textContent = `${time.toFixed(2)}s · f${f} / ${Math.round(state.comp.duration * fps)}`;
@@ -2304,13 +2462,68 @@
   // Masks with shape 'path' keep points relative to the mask's x / y.
   const isPathLayer = (k) => !!(k && isExtra(k) && lay(k).kind === 'shape' && lay(k).shape === 'path');
   const pxTol = (n) => n * (state.comp.width / preview.getBoundingClientRect().width);
+  // ---------- Cursors: each tool and each thing under the pointer gets its own cursor ----------
+  const svgCur = (body, hx, hy, fb) => `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'>${body}</svg>`)}") ${hx} ${hy}, ${fb}`;
+  const OUT = `stroke='#111' stroke-width='1.3' stroke-linejoin='round'`;
+  const NIB = `<g transform='rotate(-45 12 12)'><path d='M12 2 L17 11 L15.6 15 H8.4 L7 11 Z' fill='#fff' ${OUT}/><path d='M8.4 16.2 h7.2 v3.4 h-7.2z' fill='#fff' ${OUT}/><path d='M12 2.5 V9' stroke='#111' stroke-width='1.2'/><circle cx='12' cy='10.2' r='1.3' fill='#111'/></g>`;
+  const ARROW = `<path d='M3 2 L3 17 L7 13.2 L9.8 19.4 L12.3 18.3 L9.6 12.3 L15 12.3 Z' fill='#fff' ${OUT}/>`;
+  const badge = (inner) => `<g>${inner}</g>`;
+  const CURSORS = {
+    // Pen: a new shape starts here (✱), keep adding points, close the shape (o).
+    penNew: svgCur(NIB + badge(`<path d='M5.5 15.5v6M2.5 18.5h6M3.4 16.4l4.2 4.2M7.6 16.4l-4.2 4.2' stroke='#fff' stroke-width='3.2' stroke-linecap='round'/><path d='M5.5 15.5v6M2.5 18.5h6M3.4 16.4l4.2 4.2M7.6 16.4l-4.2 4.2' stroke='#111' stroke-width='1.3' stroke-linecap='round'/>`), 5, 5, 'crosshair'),
+    pen: svgCur(NIB, 5, 5, 'crosshair'),
+    penClose: svgCur(NIB + badge(`<circle cx='5.5' cy='18.5' r='3' fill='#fff' stroke='#111' stroke-width='1.4'/><circle cx='5.5' cy='18.5' r='1.3' fill='none' stroke='#111' stroke-width='1.1'/>`), 5, 5, 'crosshair'),
+    // Mask pen: the pen with a dashed mask frame.
+    penMask: svgCur(NIB + badge(`<rect x='1.5' y='14.5' width='8' height='7' rx='1.5' fill='#fff' stroke='#111' stroke-width='1.3' stroke-dasharray='2 1.4'/>`), 5, 5, 'crosshair'),
+    // Select: move a point (filled square), pull a curve handle (circle), move the anchor, move the layer.
+    point: svgCur(ARROW + `<rect x='14' y='15' width='6' height='6' fill='#111' stroke='#fff' stroke-width='1.2'/>`, 3, 2, 'pointer'),
+    handle: svgCur(ARROW + `<circle cx='17' cy='18' r='3.2' fill='#fff' stroke='#111' stroke-width='1.5'/>`, 3, 2, 'pointer'),
+    anchor: svgCur(`<circle cx='12' cy='12' r='6' fill='none' stroke='#fff' stroke-width='3.4'/><path d='M12 1.5v21M1.5 12h21' stroke='#fff' stroke-width='3.4'/><circle cx='12' cy='12' r='6' fill='none' stroke='#111' stroke-width='1.4'/><path d='M12 1.5v21M1.5 12h21' stroke='#111' stroke-width='1.3'/>`, 12, 12, 'crosshair'),
+    move: svgCur(ARROW + `<g transform='translate(17.5 17.5)'><path d='M0-6v12M-6 0h12M0-6l-2 2.2M0-6l2 2.2M0 6l-2-2.2M0 6l2-2.2M-6 0l2.2-2M-6 0l2.2 2M6 0l-2.2-2M6 0l-2.2 2' stroke='#fff' stroke-width='3' stroke-linecap='round'/><path d='M0-6v12M-6 0h12M0-6l-2 2.2M0-6l2 2.2M0 6l-2-2.2M0 6l2-2.2M-6 0l2.2-2M-6 0l2.2 2M6 0l-2.2-2M6 0l-2.2 2' stroke='#111' stroke-width='1.2' stroke-linecap='round'/></g>`, 3, 2, 'move'),
+    key: svgCur(ARROW + `<path d='M17.5 13.5l4 4-4 4-4-4z' fill='#f59e0b' stroke='#111' stroke-width='1.2'/>`, 3, 2, 'move'),
+    grab: 'grab', grabbing: 'grabbing',
+  };
+  let curName = null;
+  function setCursor(name) {
+    if (name === curName) return;
+    curName = name;
+    preview.style.cursor = name ? CURSORS[name] || name : 'default';
+    preview.dataset.cursor = name || 'default';
+  }
+  // What the pointer is over decides the cursor; drags keep the cursor they started with.
+  function cursorFor(e) {
+    if (panDrag) return 'grabbing';
+    if (spaceHeld || tool === 'hand') return 'grab';
+    if (tool === 'pen' || tool === 'penMask') {
+      const d = penDraft;
+      if (!d) return tool === 'pen' ? 'penNew' : 'penMask';
+      const pts = d.mask ? (lay(d.key).mask || {}).points || [] : lay(d.key).points || [];
+      const sp = pathSpace(d.key, d.mask);
+      if (pts.length >= 3 && sp) { const [cx, cy] = toComp(e), [fx, fy] = sp.fwd(pts[0].x, pts[0].y); if (Math.hypot(fx - cx, fy - cy) <= pxTol(10)) return 'penClose'; }
+      return d.mask ? 'penMask' : 'pen';
+    }
+    if (rsDrag) return HANDLE_CURSORS[rsDrag.i];
+    if (ptDrag) return ptDrag.handle ? 'handle' : 'point';
+    if (anchorDrag) return 'anchor';
+    if (mpDrag) return 'key';
+    if (dragging) return curName === 'move' ? 'move' : curName;
+    const h = pointHit(e); if (h) return h.handle ? 'handle' : 'point';
+    const hh = handleHit(e); if (hh >= 0) return HANDLE_CURSORS[hh];
+    if (anchorHit(e)) return 'anchor';
+    if (advanced && motionKeyAt(e)) return 'key';
+    return lastLayout && Engine.hitTest(lastLayout, ...toComp(e)) ? 'move' : '';
+  }
+  window.addEventListener('pointermove', (e) => { if (e.target === preview) { try { setCursor(cursorFor(e)); } catch {} } }, true);
+  window.addEventListener('keydown', (e) => { if (e.code === 'Space' && !e.repeat && e.target === document.body) setCursor('grab'); });
+  window.addEventListener('keyup', (e) => { if (e.code === 'Space') setCursor(tool === 'hand' ? 'grab' : tool === 'pen' ? 'penNew' : tool === 'penMask' ? 'penMask' : ''); });
   function setTool(t) {
     if (penDraft && t !== tool) finishPen();
+    if ((t === 'pen' || t === 'penMask') && cleanView) setClean(false);
     if (t === 'penMask' && !selected) { toast('Select the layer to mask first'); t = 'select'; }
     tool = t;
     document.querySelectorAll('[data-tool]').forEach((b) => b.classList.toggle('on', b.dataset.tool === tool));
-    preview.style.cursor = tool === 'select' ? '' : 'crosshair';
     viewport.classList.toggle('pen-on', tool !== 'select');
+    viewport.dataset.tool = tool;
     const tip = $('#penTip');
     if (tip) {
       tip.hidden = tool === 'select';
@@ -2318,7 +2531,7 @@
         penMask: `Mask pen on ${selected ? layerName(selected) : 'the layer'} · click points · click the first point to close`, hand: 'Hand · drag to move around the preview' }[tool] || '';
     }
     document.body.classList.toggle('tool-active', tool !== 'select');
-    preview.style.cursor = tool === 'hand' ? 'grab' : tool === 'select' ? '' : 'crosshair';
+    setCursor(tool === 'hand' ? 'grab' : tool === 'pen' ? 'penNew' : tool === 'penMask' ? 'penMask' : '');
     drawPreview();
   }
   document.querySelectorAll('#toolRail [data-tool]').forEach((b) => b.addEventListener('click', () => setTool(b.dataset.tool)));
@@ -2498,7 +2711,7 @@
   preview.addEventListener('pointermove', (e) => {
     if (penDraft && penDraft.dragging) { e.stopImmediatePropagation(); penMove(e); return; }
     if (!ptDrag) {
-      if (tool === 'select' && !dragging) { const h = pointHit(e); if (h) { preview.style.cursor = h.handle ? 'pointer' : 'move'; e.stopImmediatePropagation(); } }
+      if (tool === 'select' && !dragging) { const h = pointHit(e); if (h) e.stopImmediatePropagation(); }
       return;
     }
     e.stopImmediatePropagation();
@@ -2599,7 +2812,7 @@
     mpDrag.c = [e.clientX, e.clientY];
   }, true);
   preview.addEventListener('pointermove', (e) => {
-    if (!mpDrag) { if (!dragging && !anchorDrag && advanced) { const k = motionKeyAt(e); if (k) preview.style.cursor = 'move'; } return; }
+    if (!mpDrag) return;
     e.stopImmediatePropagation();
     // Measured from where the drag started on screen: the preview can shift while the key bar
     // and timeline rows appear, so absolute positions would jump.
@@ -2652,7 +2865,11 @@
   preview.addEventListener('pointerdown', (e) => {
     if (e.button === 2) return;
     const [cx, cy] = toComp(e);
-    const hit = Engine.hitTest(lastLayout, cx, cy);
+    let hit = Engine.hitTest(lastLayout, cx, cy);
+    // The selected layer keeps the click when it's under the pointer, even with another layer
+    // (say its parent) on top, so dragging a child never grabs the parent instead.
+    if (advanced && selected && hit !== selected && !(e.shiftKey || e.metaKey || e.ctrlKey) && lastLayout && lastLayout.layers && lastLayout.layers[selected]
+      && Engine.hitTest({ ...lastLayout, order: [selected], layers: { [selected]: lastLayout.layers[selected] } }, cx, cy) === selected) hit = selected;
     if (advanced && hit && selected && hit !== selected && (e.shiftKey || e.metaKey || e.ctrlKey)) { toggleMulti(hit); return; }
     if (hit !== selected && !(hit && multiSel.includes(hit))) selectLayer(hit);
     else if (hit && hit !== selected) selectLayer(hit, { keepMulti: true });
@@ -2680,8 +2897,78 @@
     anchorDrag = { key: selected };
   }, true);
   let anchorDrag = null;
+  // ---------- Resize handles on the selected layer ----------
+  // Side handles stretch one way, corners both (Shift keeps the proportions); the opposite side
+  // stays put. Shape layers change their real width / height, everything else its Width / Height %.
+  const HANDLES = [[0, 0], [0.5, 0], [1, 0], [1, 0.5], [1, 1], [0.5, 1], [0, 1], [0, 0.5]];
+  const HANDLE_CURSORS = ['nwse-resize', 'ns-resize', 'nesw-resize', 'ew-resize', 'nwse-resize', 'ns-resize', 'nesw-resize', 'ew-resize'];
+  let rsDrag = null;
+  function handlePts() {
+    if (!advanced || !selected || cleanView || tool !== 'select' || multiSel.length > 1 || !lastLayout || !lastLayout.layers) return null;
+    const b = lastLayout.layers[selected];
+    if (!b || b.group || !(b.w > 0) || !(b.h > 0)) return null;
+    const tr = b.tr || {};
+    return HANDLES.map(([u, v]) => Engine.fromParentSpace(b.parents, ...Engine.fwdPt(tr, b, b.x + u * b.w, b.y + v * b.h)));
+  }
+  function handleHit(e) {
+    const pts = handlePts(); if (!pts) return -1;
+    const [cx, cy] = toComp(e), tol = pxTol(8);
+    let best = -1, bd = tol;
+    pts.forEach(([x, y], i) => { const d = Math.hypot(x - cx, y - cy); if (d <= bd) { bd = d; best = i; } });
+    return best;
+  }
+  function drawHandles() {
+    const pts = handlePts(); if (!pts) return;
+    const s = pxTol(1), r = 4.5 * s;
+    pctx.save(); pctx.setTransform(1, 0, 0, 1, 0, 0);
+    for (const [x, y] of pts) { pctx.fillStyle = '#ffffff'; pctx.strokeStyle = '#f59e0b'; pctx.lineWidth = 1.5 * s; pctx.fillRect(x - r, y - r, r * 2, r * 2); pctx.strokeRect(x - r, y - r, r * 2, r * 2); }
+    pctx.restore();
+  }
+  const isSizedShape = (k) => { const l = isExtra(k) && lay(k); return !!l && l.kind === 'shape' && ['rect', 'rounded', 'ellipse', 'line'].includes(l.shape); };
+  preview.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    const i = handleHit(e); if (i < 0) return;
+    e.stopImmediatePropagation(); e.preventDefault();
+    preview.setPointerCapture(e.pointerId);
+    const b = lastLayout.layers[selected], [u, v] = HANDLES[i];
+    const tr0 = { ...(b.tr || {}) };
+    const F = [b.x + (1 - u) * b.w, b.y + (1 - v) * b.h];
+    rsDrag = { key: selected, i, u, v, b0: { ...b }, parents: b.parents, tr0, PF: Engine.fwdPt(tr0, b, ...F), wh: isSizedShape(selected),
+      sx0: tr0.scaleX ?? 100, sy0: tr0.scaleY ?? 100, x0: tr0.x || 0, y0: tr0.y || 0 };
+    setPlaying(false);
+  }, true);
   preview.addEventListener('pointermove', (e) => {
-    if (!anchorDrag) { if (!dragging) preview.style.cursor = anchorHit(e) ? 'crosshair' : ''; return; }
+    if (!rsDrag) return;
+    e.stopImmediatePropagation();
+    const d = rsDrag, b = d.b0, key = d.key, tp = (k) => `${pp(key)}.transform.${k}`;
+    const [lx, ly] = Engine.invPt(d.tr0, b, ...Engine.toParentSpace(d.parents, ...toComp(e)));
+    const Fx = b.x + (1 - d.u) * b.w, Fy = b.y + (1 - d.v) * b.h, Ex = b.x + d.u * b.w, Ey = b.y + d.v * b.h;
+    let kx = d.u !== 0.5 ? (lx - Fx) / (Ex - Fx) : 1, ky = d.v !== 0.5 ? (ly - Fy) / (Ey - Fy) : 1;
+    if (e.shiftKey && d.u !== 0.5 && d.v !== 0.5) { const k = Math.max(kx, ky); kx = ky = k; }
+    kx = Math.max(0.02, kx); ky = Math.max(0.02, ky);
+    let trN, bN = b, Fn = [Fx, Fy];
+    if (d.wh) {
+      const L1 = lay(key);
+      if (d.u !== 0.5) setValue(`layers.${key}.w`, Math.max(1, Math.round(b.w * kx)));
+      if (d.v !== 0.5 && L1.shape !== 'line') setValue(`layers.${key}.h`, Math.max(1, Math.round(b.h * ky)));
+      const Ln = Engine.layoutAt(pctx, Engine.resolveAt(state, time));
+      bN = (Ln.layers && Ln.layers[key]) || b;
+      Fn = [bN.x + (1 - d.u) * bN.w, bN.y + (1 - d.v) * bN.h];
+      trN = { ...d.tr0, x: d.x0, y: d.y0 };
+    } else {
+      trN = { ...d.tr0, scaleX: +(d.sx0 * kx).toFixed(2), scaleY: +(d.sy0 * ky).toFixed(2), x: d.x0, y: d.y0 };
+      if (d.u !== 0.5) setValue(tp('scaleX'), trN.scaleX);
+      if (d.v !== 0.5) setValue(tp('scaleY'), trN.scaleY);
+    }
+    // Keep the opposite side or corner where it was.
+    const P = Engine.fwdPt(trN, bN, ...Fn);
+    setValue(tp('x'), Math.round((d.x0 + d.PF[0] - P[0]) * 100) / 100);
+    setValue(tp('y'), Math.round((d.y0 + d.PF[1] - P[1]) * 100) / 100);
+    changed({ sync: true });
+  }, true);
+  preview.addEventListener('pointerup', (e) => { if (rsDrag) { rsDrag = null; e.stopImmediatePropagation(); dragging = false; changed({ sync: true }); drawPreview(); } }, true);
+  preview.addEventListener('pointermove', (e) => {
+    if (!anchorDrag) return;
     e.stopImmediatePropagation();
     const key = anchorDrag.key, b = lastLayout.layers[key];
     if (!b) return;
@@ -2777,7 +3064,7 @@
   const rowAt = (rows, my) => rows.find((r) => my >= r.y && my < r.y + r.h);
   function resizeTimeline() {
     const rows = timelineRows();
-    TL.left = advanced ? 150 : 86;
+    TL.left = advanced ? 206 : 86;
     const last = rows[rows.length - 1];
     // With a timeline height set by dragging its edge, the canvas fills it; otherwise it fits the rows.
     const hgt = Math.max(120, Math.ceil(last.y + last.h + 22), panelLayout.tlh ? $('#tlScroll').clientHeight : 0);
@@ -2808,6 +3095,61 @@
   }
   function diamond(g, x, cy, sz) { g.beginPath(); g.moveTo(x, cy - sz); g.lineTo(x + sz, cy); g.lineTo(x, cy + sz); g.lineTo(x - sz, cy); g.closePath(); g.fill(); }
   function fitText(g, s, max) { while (g.measureText(s).width > max && s.length > 4) s = s.slice(0, -2) + '…'; return s; }
+  // Advanced: per-layer switches between the name and the bars (label colour, motion blur, track matte).
+  const tlSw = () => ({ label: TL.left - 74, mb: TL.left - 52, matte: TL.left - 30 });
+  const LABEL_COLORS = [['Red', '#e05252'], ['Yellow', '#e6c84a'], ['Aqua', '#5cc8c8'], ['Pink', '#e08ab8'], ['Lavender', '#a68ae0'], ['Peach', '#e0a873'], ['Sea foam', '#8ad0a8'], ['Blue', '#5a8ae0'], ['Green', '#5ab85a'], ['Purple', '#9a5ae0'], ['Orange', '#e0882a'], ['Brown', '#a0703a'], ['Fuchsia', '#e05ae0'], ['Cyan', '#3ab8e0'], ['Sandstone', '#c0a880'], ['Dark green', '#3a7a4a']];
+  const mbMaster = () => !!(state.comp.motionBlur && state.comp.motionBlur.enabled);
+  const canMatte = (k) => { const l = lay(k); return !!l && l.kind !== 'group' && l.kind !== 'controller'; };
+  function drawMbIcon(g, x, cy, on, live) {
+    g.save(); g.strokeStyle = g.fillStyle = on ? (live ? '#f59e0b' : '#b4bccb') : '#4a5266'; g.lineWidth = 1.3;
+    g.beginPath(); g.arc(x + 11, cy, 3.6, 0, Math.PI * 2); on ? g.fill() : g.stroke();
+    g.beginPath(); for (const [dy, l] of [[-3, 5], [0, 7], [3, 5]]) { g.moveTo(x + 6.5 - l, cy + dy); g.lineTo(x + 6.5, cy + dy); } g.stroke(); g.restore();
+  }
+  function drawMatteIcon(g, x, cy, m) {
+    g.save(); g.lineWidth = 1.3; g.strokeStyle = m ? '#22d3ee' : '#4a5266';
+    g.strokeRect(x + 2.5, cy - 5.5, 8, 8);
+    g.fillStyle = m ? (m.invert ? '#0e7490' : '#22d3ee') : 'transparent'; g.fillRect(x + 6.5, cy - 1.5, 8, 8); if (!m) g.strokeRect(x + 6.5, cy - 1.5, 8, 8);
+    g.restore();
+  }
+  function openLabelMenu(x, y, key) {
+    ctxMenu.innerHTML = ''; ctxMenu.append(el('div', { class: 'ctx-title' }, `${layerName(key)} · Label colour`));
+    const grid = el('div', { class: 'label-grid' });
+    for (const [nm, c] of LABEL_COLORS) grid.append(el('button', { class: 'label-sw' + ((lay(key) || {}).label === c ? ' on' : ''), title: nm, style: `background:${c}`, onclick: () => { closeMenu(); setLabel(key, c); } }));
+    ctxMenu.append(grid);
+    menuItem('Default colour', () => setLabel(key, null), { disabled: !(lay(key) || {}).label });
+    placeMenu(x, y);
+  }
+  function setLabel(key, c) {
+    const ks = multiSel.length > 1 && multiSel.includes(key) ? multiSel : [key];
+    for (const k of ks) { if (c) lay(k).label = c; else delete lay(k).label; }
+    changed({ sync: true }); renderLayerList(); drawTimeline();
+  }
+  function toggleLayerMb(key) {
+    const l = lay(key), on = l.motionBlur === false;
+    l.motionBlur = on;
+    if (on && !mbMaster()) { state.comp.motionBlur.enabled = true; state.comp.motionBlur.preview = true; toast('Motion blur switched on for the composition too'); }
+    changed({ sync: true }); drawTimeline();
+  }
+  function toggleMasterMb() {
+    const mb = state.comp.motionBlur; mb.enabled = !mb.enabled; mb.preview = mb.enabled;
+    toast(mb.enabled ? 'Motion blur on (layers with their switch on)' : 'Motion blur off');
+    changed({ sync: true }); drawTimeline();
+  }
+  function openMatteMenu(x, y, key) {
+    const cur = lay(key).matte || null;
+    ctxMenu.innerHTML = ''; ctxMenu.append(el('div', { class: 'ctx-title' }, `${layerName(key)} · Track matte`));
+    const setM = (m) => { if (m) lay(key).matte = m; else delete lay(key).matte; changed({ sync: true }); drawTimeline(); };
+    menuItem('No track matte', () => setM(null), { on: !cur });
+    menuSep();
+    for (const [k, nm] of tracks()) {
+      if (k === key || !canMatte(k) || (lay(k).matte && lay(k).matte.src === key)) continue;
+      menuItem(`Use ${nm}`, () => setM({ src: k, invert: !!(cur && cur.invert) }), { on: !!(cur && cur.src === k) });
+    }
+    menuSep();
+    menuItem('Alpha matte (show where the matte is)', () => setM({ ...(cur || {}), invert: false }), { on: !!(cur && !cur.invert), disabled: !cur });
+    menuItem('Alpha inverted (hide where the matte is)', () => setM({ ...(cur || {}), invert: true }), { on: !!(cur && cur.invert), disabled: !cur });
+    placeMenu(x, y);
+  }
   function drawTimeline() {
     const { dpr, w, h, sx } = tlGeom();
     const g = tctx; g.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -2844,6 +3186,7 @@
     g.strokeStyle = '#f59e0b'; g.lineWidth = 1.5; g.beginPath(); g.moveTo(xEnd, 0); g.lineTo(xEnd, h); g.stroke(); g.lineWidth = 1;
     g.fillStyle = '#f59e0b'; g.beginPath(); g.roundRect ? g.roundRect(xEnd - 5, 2, 10, TL.ruler - 6, 3) : g.rect(xEnd - 5, 2, 10, TL.ruler - 6); g.fill();
     g.fillStyle = '#111'; g.fillRect(xEnd - 2, 7, 1, TL.ruler - 16); g.fillRect(xEnd + 1, 7, 1, TL.ruler - 16);
+    if (advanced) { const SW = tlSw(); g.fillStyle = '#12151c'; g.fillRect(0, 0, TL.left - 6, TL.ruler - 2); drawMbIcon(g, SW.mb, 11, mbMaster(), mbMaster()); g.fillStyle = '#596176'; g.font = '9px -apple-system, sans-serif'; g.fillText('MB', SW.mb - 16, 14); g.fillText('MATTE', SW.matte - 2 , 14); }
     const rows = timelineRows();
     let keyIdx = 0;
     for (const row of rows) {
@@ -2858,10 +3201,18 @@
           g.fillStyle = '#8a93a6'; g.font = '10px -apple-system, sans-serif';
           g.fillText(collapsed[key] ? '▸' : '▾', 5, y + 15); lx = 17;
         }
-        g.fillStyle = isSel ? '#f59e0b' : '#8a93a6'; g.font = `${isSel ? 600 : 400} 11px -apple-system, sans-serif`; g.fillText(label, lx, y + 15);
+        g.font = `${isSel ? 600 : 400} 11px -apple-system, sans-serif`;
+        const nameMax = (advanced ? tlSw().label : TL.left - 6) - lx - 4 - (advanced && row.count && collapsed[key] ? 28 : 0);
+        const shown = fitText(g, label, nameMax);
+        g.fillStyle = isSel ? '#f59e0b' : '#8a93a6'; g.fillText(shown, lx, y + 15);
         if (advanced && row.count && collapsed[key]) {
           g.fillStyle = '#596176'; g.font = '10px -apple-system, sans-serif';
-          g.fillText(`${row.count} ◆`, lx + g.measureText(label).width + 30, y + 15);
+          g.fillText(`${row.count} ◆`, lx + g.measureText(shown).width + 6, y + 15);
+        }
+        if (advanced) {
+          const SW = tlSw(), L1 = lay(key);
+          g.fillStyle = color; g.beginPath(); g.roundRect ? g.roundRect(SW.label + 4, y + 6, 11, 11, 2) : g.rect(SW.label + 4, y + 6, 11, 11); g.fill();
+          if (L1.kind !== 'group' && L1.kind !== 'controller') { drawMbIcon(g, SW.mb, y + 11, L1.motionBlur !== false, mbMaster()); if (canMatte(key)) drawMatteIcon(g, SW.matte, y + 11, L1.matte && L1.matte.src ? L1.matte : null); }
         }
         const a = lay(key).anim;
         const L0 = lay(key);
@@ -2944,6 +3295,18 @@
     tl.setPointerCapture(e.pointerId);
     const row = rowAt(timelineRows(), my);
     const release = () => { try { tl.releasePointerCapture(e.pointerId); } catch {} };
+    if (advanced && e.button === 0 && mx >= tlSw().label && mx < TL.left - 6) {
+      const SW = tlSw();
+      if (my < TL.ruler) { if (mx >= SW.mb && mx < SW.mb + 20) toggleMasterMb(); release(); return; }
+      if (row && row.type === 'bar') {
+        const L1 = lay(row.key), plain = L1.kind !== 'group' && L1.kind !== 'controller';
+        release();
+        if (mx < SW.mb) return openLabelMenu(e.clientX, e.clientY, row.key);
+        if (plain && mx < SW.matte) return toggleLayerMb(row.key);
+        if (plain && canMatte(row.key)) return openMatteMenu(e.clientX, e.clientY, row.key);
+        return;
+      }
+    }
     // End handle on the ruler (or the end line anywhere outside a layer bar's edge): change the length.
     if (Math.abs(mx - sx(state.comp.duration)) <= 7 && (my < TL.ruler || !row || row.type !== 'bar')) {
       const g0 = tlGeom();
@@ -3095,6 +3458,13 @@
       tip = { in: 'Drag to move the in point', out: 'Drag to move the out point', inDur: 'Drag to change the in transition length', outDur: 'Drag to change the out transition length', both: 'Drag to move the whole layer in time' }[m] || '';
       if (advanced && (m === 'inDur' || m === 'outDur')) tip += ' · click to edit or delete this animation';
     } else if (row && mx < 16 && (row.type === 'group' || (row.type === 'bar' && advanced && row.count))) tip = 'Show or hide this layer’s keyframes';
+    else if (advanced && mx >= tlSw().label && mx < TL.left - 6 && (my < TL.ruler || (row && row.type === 'bar'))) {
+      const SW = tlSw();
+      if (my < TL.ruler) tip = mx >= SW.mb && mx < SW.mb + 20 ? `Motion blur for the whole composition: ${mbMaster() ? 'on' : 'off'} (click to switch)` : '';
+      else if (mx < SW.mb) tip = 'Label colour: click to choose';
+      else if (mx < SW.matte) tip = `Motion blur for this layer: ${lay(row.key).motionBlur !== false ? 'on' : 'off'}${mbMaster() ? '' : ' (composition switch is off)'}`;
+      else { const m = lay(row.key).matte; tip = m && m.src ? `Track matte: ${layerName(m.src)}${m.invert ? ' (inverted)' : ''} · click to change` : 'Track matte: use another layer as this layer’s mask'; }
+    }
     tl.style.cursor = cur; tl.title = tip;
   });
   new ResizeObserver(drawTimeline).observe(tl);
@@ -3723,26 +4093,33 @@
   });
 
   // Renders every frame of a design and streams it to ffmpeg. Used by Export and Batch export.
-  async function renderToFile(snap, format, out, onProgress, { bg = '#000000', isCancelled = () => false } = {}) {
+  async function renderToFile(snap, format, out, onProgress, { bg = '#000000', isCancelled = () => false, gpu = false } = {}) {
     const { width, height, fps, duration } = snap.comp;
     const frames = Math.max(1, Math.round(duration * fps));
     await ensureFonts(snap); await document.fonts.ready; await Engine.imagesReady(snap);
     const cv = document.createElement('canvas'); cv.width = width; cv.height = height;
-    const ctx = cv.getContext('2d', { willReadFrequently: true });
-    const job = await api.exporter.start({ format, out, width, height, fps });
+    // GPU: draw on the graphics card. Motion blur reads every sample back, which is faster on a CPU canvas.
+    const mb = snap.comp.motionBlur, readsBack = !!(mb && mb.enabled);
+    const ctx = cv.getContext('2d', { willReadFrequently: !gpu || readsBack });
+    const job = await api.exporter.start({ format, out, width, height, fps, hw: gpu });
     exportJob = job;
+    // Frames go to the encoder while the next ones render (a few in flight at once).
+    const inFlight = [];
     try {
       for (let i = 0; i < frames; i++) {
         if (isCancelled()) throw new Error('cancelled');
         Engine.renderFrame(ctx, snap, i / fps, { precise: true });
         if (format === 'mp4') { ctx.save(); ctx.globalCompositeOperation = 'destination-over'; ctx.fillStyle = bg; ctx.fillRect(0, 0, width, height); ctx.restore(); }
         const img = ctx.getImageData(0, 0, width, height);
-        await api.exporter.frame(job, new Uint8Array(img.data.buffer));
+        inFlight.push(api.exporter.frame(job, new Uint8Array(img.data.buffer)));
+        if (inFlight.length >= 3) await inFlight.shift();
         onProgress(i + 1, frames);
-        if (i % 4 === 0) await new Promise((r) => setTimeout(r, 0));
+        if (i % 8 === 0) await new Promise((r) => setTimeout(r, 0));
       }
+      await Promise.all(inFlight.splice(0));
       return await api.exporter.finish(job);
     } catch (err) {
+      await Promise.allSettled(inFlight);
       await api.exporter.cancel(job).catch(() => {});
       throw err;
     } finally { exportJob = null; }
@@ -3804,6 +4181,8 @@
     try { localStorage.setItem('thirdline:variants', JSON.stringify(wantedVariants())); } catch {}
   }
   try { for (const k of JSON.parse(localStorage.getItem('thirdline:variants') || '[]')) { const i = k === 'vertical' ? $('#varVertical') : $('#varSquare'); if (i) i.checked = true; } } catch {}
+  try { $('#exportGpu').checked = localStorage.getItem('thirdline:gpu') !== '0'; } catch {}
+  $('#exportGpu').addEventListener('change', () => { try { localStorage.setItem('thirdline:gpu', $('#exportGpu').checked ? '1' : '0'); } catch {} });
   $('#varVertical').addEventListener('change', refreshVariantThumbs);
   $('#varSquare').addEventListener('change', refreshVariantThumbs);
   const withSuffix = (out, suf) => (/\.[a-z0-9]+$/i.test(out) ? out.replace(/(\.[a-z0-9]+)$/i, `-${suf}$1`) : `${out}-${suf}`);
@@ -3825,13 +4204,20 @@
     exportCancelled = false;
     const started = performance.now();
     try {
-      const res = await renderToFile(snap, format, out, (n, total) => {
+      const progress = (n, total) => {
         const pct = (n / total) * 100; bar.style.width = `${pct}%`;
         const el2 = (performance.now() - started) / 1000;
         label.textContent = n === total ? `${prefix}Finalizing…` : `${prefix}Frame ${n} / ${total} · ${Math.round(pct)}% · ${el2 > 1 ? Math.round((el2 / n) * (total - n)) + 's left' : ''}`;
-      }, { bg: $('#exportBg').value, isCancelled: () => exportCancelled });
+      };
+      const gpu = $('#exportGpu').checked;
+      let res;
+      try { res = await renderToFile(snap, format, out, progress, { bg: $('#exportBg').value, isCancelled: () => exportCancelled, gpu }); } catch (err) {
+        // If the hardware path fails, quietly do it again the regular way.
+        if (!gpu || err.message === 'cancelled') throw err;
+        res = await renderToFile(snap, format, out, progress, { bg: $('#exportBg').value, isCancelled: () => exportCancelled, gpu: false });
+      }
       lastOut = res.out;
-      label.textContent = `${prefix}Done in ${((performance.now() - started) / 1000).toFixed(1)}s`;
+      label.textContent = `${prefix}Done in ${((performance.now() - started) / 1000).toFixed(1)}s${res.encoder ? ` · ${res.encoder}` : ''}`;
       $('#btnReveal').hidden = false;
       toast(`Export finished${prefix ? ` (${prefix.replace(/ · $/, '')})` : ''}`);
       return true;
@@ -3976,7 +4362,7 @@
         await renderToFile(snap, format, out, (n, total) => {
           bar.style.width = `${((i + n / total) / batch.rows.length) * 100}%`;
           label.textContent = `${i + 1} of ${batch.rows.length} · ${names[i]}`;
-        }, { bg: $('#exportBg').value, isCancelled: () => batchCancelled });
+        }, { bg: $('#exportBg').value, isCancelled: () => batchCancelled, gpu: !!($('#exportGpu') && $('#exportGpu').checked) });
         done++;
       }
       label.textContent = `Done: ${done} files`;
@@ -4053,6 +4439,7 @@
     else if ((e.key === 'Escape' || e.key === 'Enter') && (penDraft || tool !== 'select')) { e.preventDefault(); if (penDraft) finishPen(); else setTool('select'); }
     else if (!mod && !e.altKey && advanced && e.key.toLowerCase() === 'p') setTool(e.shiftKey ? 'penMask' : 'pen');
     else if (!mod && !e.altKey && e.key.toLowerCase() === 'v') setTool('select');
+    else if ((!mod && !e.altKey && e.key === '`') || (mod && e.shiftKey && e.key.toLowerCase() === 'h')) { e.preventDefault(); setClean(!cleanView); }
     else if (!mod && !e.altKey && advanced && e.key.toLowerCase() === 'h') setTool('hand');
     else if ((e.key === 'Delete' || e.key === 'Backspace') && selPoint && !selKey && deleteSelPoint()) e.preventDefault();
     else if (e.key === 'Escape') { (selKey = null, selKeys = []); selPreset = null; updateKeyBar(); drawTimeline(); selectLayer(null); }
@@ -4246,7 +4633,7 @@
       selKeyCount: () => selKeys.length, multiSel: () => multiSel.slice(), motionPath: () => motionPath(), variantState: (st, w, h) => variantState(st, w, h),
       selectAllKeysOf: (path) => { selKeys = (state.keys[path] || []).map((k) => ({ path, k })); selKey = selKeys[selKeys.length - 1] || null; updateKeyBar(); drawTimeline(); }, selKeyTimes: () => selKeys.map((s) => s.k.t),
       tlDebug: () => { const g = tlGeom(); return { rows: timelineRows(), left: TL.left, right: TL.right, ruler: TL.ruler, w: g.w, span: g.span, t0: g.t0, z: tlView.z }; },
-      time: () => time, tool: () => tool, selPoint: () => selPoint, viewScale: () => viewScale(), pview: () => ({ ...pview }), rects: () => Object.fromEntries(Object.entries(lastLayout.layers).map(([k, b]) => [k, Engine.screenRect(b)])), playing: () => playing };
+      time: () => time, tool: () => tool, selPoint: () => selPoint, viewScale: () => viewScale(), pview: () => ({ ...pview }), rects: () => Object.fromEntries(Object.entries(lastLayout.layers).map(([k, b]) => [k, Engine.screenRect(b)])), playing: () => playing, handles: () => handlePts(), cursor: () => curName, tlLeft: () => TL.left };
     setTimeout(() => checkUpdates(false).catch(() => {}), 3000);
   }
   boot();

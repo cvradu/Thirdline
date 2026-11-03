@@ -32,6 +32,10 @@ function createWindow() {
       backgroundThrottling: false,
     },
   });
+  // Let the page list the fonts installed on this computer (Local Font Access).
+  const ses = win.webContents.session;
+  ses.setPermissionCheckHandler(() => true);
+  ses.setPermissionRequestHandler((_wc, _perm, cb) => cb(true));
   win.loadFile(path.join(__dirname, 'src', 'index.html'));
   win.webContents.on('did-finish-load', () => {
     rendererReady = true;
@@ -154,6 +158,14 @@ ipcMain.handle('fonts:import', async () => {
     return fontEntry(file);
   });
 });
+ipcMain.handle('fonts:openManager', async () => {
+  if (process.platform === 'darwin') {
+    for (const p of ['/System/Applications/Font Book.app', '/Applications/Font Book.app']) if (fs.existsSync(p)) return (await shell.openPath(p)) === '';
+    return false;
+  }
+  if (process.platform === 'win32') return (await shell.openPath(path.join(process.env.WINDIR || 'C:\\Windows', 'Fonts'))) === '';
+  return false;
+});
 ipcMain.handle('fonts:remove', (_e, file) => {
   try { fs.unlinkSync(path.join(fontsDir(), path.basename(file))); return true; } catch { return false; }
 });
@@ -166,10 +178,20 @@ const FORMATS = {
   mp4: { ext: 'mp4', label: 'MP4 · H.264 (no alpha)' },
 };
 
-function ffmpegArgs(format, w, h, fps, out) {
+// Hardware encoders (Apple VideoToolbox). Each candidate is tested once with a tiny encode
+// (and, for ProRes, a decode that checks the alpha survived) before it's trusted.
+const HW = {
+  prores: [
+    ['-c:v', 'prores_videotoolbox', '-profile:v', '4444', '-pix_fmt', 'bgra'],
+    ['-c:v', 'prores_videotoolbox', '-profile:v', '4444', '-pix_fmt', 'ayuv64le'],
+  ],
+  mp4: [['-c:v', 'h264_videotoolbox', '-b:v', '24M', '-pix_fmt', 'yuv420p', '-movflags', '+faststart']],
+};
+function ffmpegArgs(format, w, h, fps, out, hw) {
   const input = ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'rawvideo', '-pix_fmt', 'rgba', '-s', `${w}x${h}`, '-framerate', String(fps), '-i', 'pipe:0'];
   const bt709 = ['-color_primaries', 'bt709', '-color_trc', 'bt709', '-colorspace', 'bt709'];
   const yuvScale = ['-vf', 'scale=out_color_matrix=bt709:out_range=tv'];
+  if (hw) return [...input, ...hw, ...bt709, out];
   switch (format) {
     case 'prores':
       return [...input, ...yuvScale, '-c:v', 'prores_ks', '-profile:v', '4444', '-pix_fmt', 'yuva444p10le', '-alpha_bits', '16', '-vendor', 'apl0', ...bt709, out];
@@ -199,11 +221,47 @@ ipcMain.handle('export:chooseDest', async (_e, format, baseName) => {
 const jobs = new Map();
 let jobSeq = 0;
 
-function startJob({ format, out, width, height, fps }) {
+const run = (args, input, timeout = 15000) => new Promise((resolve) => {
+  let out = Buffer.alloc(0), p;
+  try { p = spawn(ffmpegPath(), args, { stdio: ['pipe', 'pipe', 'ignore'] }); } catch { return resolve(null); }
+  const t = setTimeout(() => { try { p.kill('SIGKILL'); } catch {} }, timeout);
+  p.stdout.on('data', (d) => { out = Buffer.concat([out, d]); });
+  p.stdin.on('error', () => {});
+  p.on('error', () => { clearTimeout(t); resolve(null); });
+  p.on('close', (code) => { clearTimeout(t); resolve(code === 0 ? out : null); });
+  if (input) p.stdin.end(input); else p.stdin.end();
+});
+const hwCache = {};
+async function probeHw(format) {
+  if (format in hwCache) return hwCache[format];
+  hwCache[format] = null;
+  if (process.platform !== 'darwin' || !HW[format]) return null;
+  const W = 64, H = 64, frame = Buffer.alloc(W * H * 4);
+  for (let i = 0; i < frame.length; i += 4) { frame[i] = 200; frame[i + 1] = 60; frame[i + 2] = 30; frame[i + 3] = 128; }
+  const tmp = path.join(app.getPath('temp'), `thirdline-probe-${process.pid}.${FORMATS[format].ext}`);
+  for (const cand of HW[format]) {
+    const ok = await run(ffmpegArgs(format, W, H, 30, tmp, cand), Buffer.concat([frame, frame]));
+    if (!ok || !fs.existsSync(tmp)) continue;
+    if (format === 'prores') {
+      // Decode it again: the alpha has to come back, or the hardware path isn't usable.
+      const dec = await run(['-hide_banner', '-loglevel', 'error', '-i', tmp, '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgba', 'pipe:1']);
+      if (!dec || dec.length < W * H * 4) continue;
+      const a = dec[(32 * W + 32) * 4 + 3];
+      if (Math.abs(a - 128) > 12) continue;
+    }
+    hwCache[format] = cand;
+    break;
+  }
+  try { fs.rmSync(tmp, { force: true }); } catch {}
+  return hwCache[format];
+}
+const ENCODER_NAME = { prores: 'ProRes (software)', webm: 'VP9 (software)', mp4: 'H.264 (software)', png: 'PNG' };
+async function startJob({ format, out, width, height, fps, hw }) {
   if (format === 'png') fs.mkdirSync(out, { recursive: true });
-  const args = ffmpegArgs(format, width, height, fps, out);
+  const hwArgs = hw ? await probeHw(format) : null;
+  const args = ffmpegArgs(format, width, height, fps, out, hwArgs);
   const proc = spawn(ffmpegPath(), args, { stdio: ['pipe', 'ignore', 'pipe'] });
-  const job = { proc, log: '', out, format, done: null, error: null };
+  const job = { proc, log: '', out, format, done: null, error: null, encoder: hwArgs ? `${hwArgs[1].replace('_videotoolbox', '').replace('prores', 'ProRes').replace('h264', 'H.264')} (Apple hardware)` : ENCODER_NAME[format] };
   proc.stderr.on('data', (d) => { job.log += d.toString(); });
   proc.stdin.on('error', (err) => { job.error = err; });
   job.done = new Promise((resolve) => {
@@ -244,7 +302,7 @@ ipcMain.handle('export:finish', async (_e, id) => {
   const code = await job.done;
   jobs.delete(id);
   if (code !== 0) throw new Error(`ffmpeg exited with code ${code}\n${job.log}`);
-  return { out: job.out };
+  return { out: job.out, encoder: job.encoder };
 });
 ipcMain.handle('export:cancel', async (_e, id) => {
   const job = jobs.get(id);
@@ -287,7 +345,7 @@ ipcMain.handle('fonts:read', (_e, file) => {
 ipcMain.handle('shell:reveal', (_e, p) => shell.showItemInFolder(p));
 ipcMain.handle('app:info', () => ({ version: app.getVersion(), ffmpeg: ffmpegPath(), platform: process.platform }));
 
-module.exports = { ffmpegArgs };
+module.exports = { ffmpegArgs, HW };
 
 // ---------- Live output (OBS browser source) ----------
 const live = createLiveServer({

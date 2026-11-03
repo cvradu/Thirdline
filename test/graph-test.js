@@ -11,7 +11,8 @@ const SHOT = process.env.SHOT || '.';
   const S = () => p.evaluate(() => JSON.parse(JSON.stringify(window.__l3rd.state)));
   let st = await S();
   let box = await p.locator('#timeline').boundingBox();
-  const sx = (t) => box.x + 150 + (t / (st.comp.duration * 1.15)) * (box.width - 166);
+  const TLL = await p.evaluate(() => window.__l3rd.tlLeft());
+  const sx = (t) => box.x + TLL + (t / (st.comp.duration * 1.15)) * (box.width - TLL - 16);
   const rowY = (i) => box.y + 22 + 6 + 28 * i + 11;
   // 1. right-click the backdrop in ramp → menu → Overshoot
   const a = st.backdrop.anim;

@@ -257,10 +257,25 @@
     }
 
     // Parenting: the user transforms of a layer's parents, nearest first (Engine parentChain).
-    function chain(id) {
+    function chain(id, t) {
+      if (t === undefined) t = time;
       var out = [], seen = {}, p = C.L[id] && C.L[id].parent;
       seen[id] = 1;
-      while (p && !seen[p] && C.L[p]) { seen[p] = 1; out.push(user(p, frame(p).b)); p = C.L[p].parent; }
+      while (p && !seen[p] && C.L[p]) {
+        seen[p] = 1;
+        var pd = C.L[p], pb = frame(p).b, pu = user(p, pb);
+        // Children follow their parent's In/Out motion too (Engine applyParents): the parent's
+        // animation as one more mapping, applied before its own transform.
+        if (pd.kind !== 'group' && pd.anim) {
+          var pph = phaseAt(pd.anim, t, C.dur);
+          var ptype = pph.visible ? effType(pph) : 'none';
+          if (ptype !== 'none' && !PER[ptype]) {
+            var pr = animParams(ptype, pph.p, pb, pd.anim.distance || 0, pu.c);
+            if (pr.dx || pr.dy || pr.sx !== 1 || pr.sy !== 1) out.push({ c: [pr.ox, pr.oy], d: [pr.dx, pr.dy], s: [pr.sx, pr.sy], rot: 0 });
+          }
+        }
+        out.push(pu); p = pd.parent;
+      }
       return out;
     }
     function applyChain(ch, p) { for (var i = 0; i < ch.length; i++) p = applyU(ch[i], p); return p; }
@@ -292,7 +307,7 @@
       var q = [o[0] + da[0] - u.c[0] + sa[0] * (fr.pos0[0] - o[0]), o[1] + da[1] - u.c[1] + sa[1] * (fr.pos0[1] - o[1])];
       var rq = rotate([u.s[0] * q[0], u.s[1] * q[1]], u.rot);
       // Parents add their own rotation and scale on top (exact for uniform parent scale).
-      var ch = chain(id), pos = [u.c[0] + u.d[0] + rq[0], u.c[1] + u.d[1] + rq[1]], psx = 1, psy = 1, prot = 0;
+      var ch = chain(id, t), pos = [u.c[0] + u.d[0] + rq[0], u.c[1] + u.d[1] + rq[1]], psx = 1, psy = 1, prot = 0;
       for (var ci = 0; ci < ch.length; ci++) { pos = applyU(ch[ci], pos); psx *= ch[ci].s[0]; psy *= ch[ci].s[1]; prot += ch[ci].rot; }
       var res = {
         pos: pos,
@@ -753,7 +768,7 @@
       markHandled('backdrop'); handled.add('backdrop.opacity');
       const base = { kind: 'backdrop', anim: bd.anim, vals: vals.vals, keyed: vals.keyed, baseOpacity: bd.opacity ?? 1, maskShape: bd.mask && bd.mask.shape, bleed: Engine.bleed(bd) };
       const fx = vals.sliders.map(fxSlider);
-      const common = (id) => ({ ...inOut(bd), props: transformProps(id), masks: masksFor(id, bd, { clip: hasClip(bd) }), motionBlur: !!(st.comp.motionBlur && st.comp.motionBlur.enabled) });
+      const common = (id) => ({ ...inOut(bd), props: transformProps(id), masks: masksFor(id, bd, { clip: hasClip(bd) }), motionBlur: !!(st.comp.motionBlur && st.comp.motionBlur.enabled) && bd.motionBlur !== false });
       const sh = bd.shadow && bd.shadow.on ? shadowFx('TL Shadow', bd.shadow) : null;
       const fillKs = keys['backdrop.fill'];
       if (fillKs && fillKs.length) handled.add('backdrop.fill');
@@ -855,7 +870,7 @@
       const effects = [...vals.sliders.map(fxSlider)];
       if (ly.shadow && ly.shadow.on) effects.push(shadowFx('TL Shadow', ly.shadow));
       effects.push(...blurEffect(id, mayBlur(ly, prefix)));
-      const base = { id, name, ...inOut(ly), props: transformProps(id), masks: masksFor(id, ly, { clip: hasClip(ly) }), effects, motionBlur: !!(st.comp.motionBlur && st.comp.motionBlur.enabled) };
+      const base = { id, name, ...inOut(ly), props: transformProps(id), masks: masksFor(id, ly, { clip: hasClip(ly) }), effects, motionBlur: !!(st.comp.motionBlur && st.comp.motionBlur.enabled) && ly.motionBlur !== false };
       if (ly.kind === 'image') {
         if (!ly.src) return;
         images[id] = ly.src;
@@ -884,7 +899,7 @@
         textLayer(id, ly, id, line, { kind: id, name: id === 'title' ? 'Title' : 'Subtitle', label: id === 'title' ? 'Title' : 'Subtitle', clipToBox: ly.clipToBox && CFG.boxLayer !== null });
       } else {
         const ly = st.layers && st.layers[id];
-        if (ly && ly.kind === 'group') {
+        if (ly && (ly.kind === 'group' || ly.kind === 'controller')) {
           // Groups have no AE layer: their transform is carried by the expressions of the layers in them.
           const b = L.extras && L.extras[id];
           CFG.L[id] = { kind: 'group', on: false, name: null, anim: ly.anim, vals: { ...TR_DEFAULT, ...(ly.transform || {}) }, keyed: [], box: b ? { x: b.x, y: b.y, w: b.w, h: b.h } : { ...L.box } };
@@ -918,6 +933,8 @@
       const l = Engine.getLayer(st, id); if (!l) continue;
       if (l.kind === 'shape' && l.shape === 'path') warn(`Pen shape “${l.name || 'Shape'}” is left out of the .mogrt for now; export a MOV to keep it.`);
       if (l.mask && l.mask.enabled && l.mask.shape === 'path') warn(`${l.name || id}: pen-drawn masks are exported as a rectangle mask.`);
+      if (l.torn && l.torn.on) warn(`${l.name || id}: torn paper edges aren’t carried over to After Effects; export a MOV to keep them.`);
+      if (l.matte && l.matte.src) warn(`${l.name || id}: its track matte isn’t carried over to After Effects yet; export a MOV to keep it.`);
       if ((l.corners && l.corners.on) || (l.mask && l.mask.corners && l.mask.corners.on)) warn(`${l.name || id}: separate corner rounding uses the first corner’s radius in After Effects.`);
     }
     if (st.layout.align === 'justify') warn('Justified text keeps its letter spacing when edited; it won’t re-justify.');
