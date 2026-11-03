@@ -211,6 +211,18 @@ const { chromium } = require('playwright');
     adv.layers = { bar: Presets.newLayer('shape', { name: 'Bar' }), tag: Presets.newLayer('text', { name: 'Tag', text: 'LIVE', size: 22, y: -30 }) };
     adv.order = ['bar', 'backdrop', 'title', 'subtitle', 'tag'];
     res.push(compare(adv, 'Advanced (keys, extras, right anchor)', [0.5, 1.5, 2.5, D - 0.2]));
+    // Anchor points and parenting: title follows a rotating, scaling backdrop pivoting on its corner.
+    const par = Presets.builtin(3);
+    par.backdrop.transform.anchorX = 0; par.backdrop.transform.anchorY = 100;
+    par.title.parent = 'backdrop'; par.subtitle.parent = 'backdrop';
+    par.title.transform.anchorX = 100; par.title.transform.rotation = 3;
+    par.keys = {
+      'backdrop.transform.rotation': [{ t: 1, v: 0, e: 'linear' }, { t: 2.5, v: -6, e: 'linear' }],
+      'backdrop.transform.scale': [{ t: 1, v: 100, e: 'linear' }, { t: 2.5, v: 115, e: 'linear' }],
+      'backdrop.transform.x': [{ t: 1, v: 0, e: 'linear' }, { t: 2.5, v: 60, e: 'linear' }],
+    };
+    par.backdrop.anim.in.type = 'scale';
+    res.push(compare(par, 'Anchor + parenting', [0.45, 0.6, 1.5, 2.5, D - 0.2]));
     return res;
   });
   if (process.env.DUMP) { const imgs = await p.evaluate(() => window.__imgs); if (imgs) imgs.forEach((d, i) => require('fs').writeFileSync(`${process.env.DUMPDIR || '.'}/dump-${i}.png`, Buffer.from(d.split(',')[1], 'base64'))); }

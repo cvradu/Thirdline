@@ -95,9 +95,9 @@
     var PER = { lettersFade: 1, lettersRise: 1, lettersDrop: 1, lettersScale: 1, lettersBlur: 1, typewriter: 1, wordsRise: 1 };
 
     // Same as Engine animParams.
-    function animParams(type, p, b, dist) {
+    function animParams(type, p, b, dist, pivot) {
       var q = 1 - p;
-      var r = { dx: 0, dy: 0, sx: 1, sy: 1, ox: b.x + b.w / 2, oy: b.y + b.h / 2, alpha: 1, clip: null, blur: 0, tracking: 0, maskSelf: false };
+      var r = { dx: 0, dy: 0, sx: 1, sy: 1, ox: pivot ? pivot[0] : b.x + b.w / 2, oy: pivot ? pivot[1] : b.y + b.h / 2, alpha: 1, clip: null, blur: 0, tracking: 0, maskSelf: false };
       switch (type) {
         case 'fade': r.alpha = p; break;
         case 'slideLeft': r.dx = -dist * q; r.alpha = clamp(p * 3); break;
@@ -231,8 +231,12 @@
     // User transform (Advanced mode position/scale/rotation…) of a layer.
     function user(id, b) {
       var sc = v(id, 'scale') / 100;
+      var ax = v(id, 'anchorX'), ay = v(id, 'anchorY');
+      if (ax === undefined || ax === null) ax = 50;
+      if (ay === undefined || ay === null) ay = 50;
       return {
-        c: [b.x + b.w / 2, b.y + b.h / 2],
+        // Anchor point: where the layer scales and rotates from (Engine pivotOf).
+        c: [b.x + (b.w * ax) / 100, b.y + (b.h * ay) / 100],
         d: [v(id, 'x'), v(id, 'y')],
         s: [Math.max(1e-4, sc * v(id, 'scaleX') / 100), Math.max(1e-4, sc * v(id, 'scaleY') / 100)],
         rot: v(id, 'rotation'),
@@ -251,6 +255,15 @@
       return [u.c[0] + u.d[0] + q[0], u.c[1] + u.d[1] + q[1]];
     }
 
+    // Parenting: the user transforms of a layer's parents, nearest first (Engine parentChain).
+    function chain(id) {
+      var out = [], seen = {}, p = C.L[id] && C.L[id].parent;
+      seen[id] = 1;
+      while (p && !seen[p] && C.L[p]) { seen[p] = 1; out.push(user(p, frame(p).b)); p = C.L[p].parent; }
+      return out;
+    }
+    function applyChain(ch, p) { for (var i = 0; i < ch.length; i++) p = applyU(ch[i], p); return p; }
+
     // Everything about a layer at time t: AE transform (anchor stays [0,0]) plus effect amounts.
     var xcache = {};
     function xform(id, t) {
@@ -263,7 +276,7 @@
       var ph = phaseAt(d.anim, t, C.dur);
       var type = ph.visible ? effType(ph) : 'none';
       var per = !!PER[type];
-      var r = animParams(per ? 'none' : type, ph.p, b, d.anim.distance || 0);
+      var r = animParams(per ? 'none' : type, ph.p, b, d.anim.distance || 0, u.c);
       var da = [r.dx, r.dy];
       var size = d.size ? d.size * fr.F[0] : 0;
       var extra = 0;
@@ -277,10 +290,13 @@
       // position = c + d + R·Su·(o + da − c + Sa·(pos0 − o)), scale = Su·Sa·F.
       var q = [o[0] + da[0] - u.c[0] + sa[0] * (fr.pos0[0] - o[0]), o[1] + da[1] - u.c[1] + sa[1] * (fr.pos0[1] - o[1])];
       var rq = rotate([u.s[0] * q[0], u.s[1] * q[1]], u.rot);
+      // Parents add their own rotation and scale on top (exact for uniform parent scale).
+      var ch = chain(id), pos = [u.c[0] + u.d[0] + rq[0], u.c[1] + u.d[1] + rq[1]], psx = 1, psy = 1, prot = 0;
+      for (var ci = 0; ci < ch.length; ci++) { pos = applyU(ch[ci], pos); psx *= ch[ci].s[0]; psy *= ch[ci].s[1]; prot += ch[ci].rot; }
       var res = {
-        pos: [u.c[0] + u.d[0] + rq[0], u.c[1] + u.d[1] + rq[1]],
-        scale: [u.s[0] * sa[0] * fr.F[0] * 100, u.s[1] * sa[1] * fr.F[1] * 100],
-        rot: u.rot,
+        pos: pos,
+        scale: [psx * u.s[0] * sa[0] * fr.F[0] * 100, psy * u.s[1] * sa[1] * fr.F[1] * 100],
+        rot: u.rot + prot, ch: ch,
         opacity: ph.visible ? 100 * u.op * clamp(r.alpha) * clamp(d.baseOpacity === undefined ? 1 : v(id, 'baseOpacity')) : 0,
         blur: u.blur + r.blur,
         trackingEm: size > 0 ? ((extra + u.tracking) / size) * 1000 : 0,
@@ -351,7 +367,8 @@
         }
         if (kind === 'box') {
           var bxId = C.boxLayer, bb = layout().box, ub = user(bxId, bb);
-          var pts = rectPts(bb.x, bb.y, bb.w, bb.h).map(function (p) { return applyU(ub, p); });
+          var bch = chain(bxId);
+          var pts = rectPts(bb.x, bb.y, bb.w, bb.h).map(function (p) { return applyChain(bch, applyU(ub, p)); });
           return path(X, pts);
         }
         // clip: drawn in the layer's own (user-transformed) space
@@ -370,7 +387,7 @@
         }
         if (!rect) return path(X, rectPts(-BIG, -BIG, 2 * BIG, 2 * BIG));
         var u = X.u;
-        return path(X, rectPts(rect.x, rect.y, Math.max(0, rect.w), Math.max(0, rect.h)).map(function (p) { return applyU(u, p); }));
+        return path(X, rectPts(rect.x, rect.y, Math.max(0, rect.w), Math.max(0, rect.h)).map(function (p) { return applyChain(X.ch, applyU(u, p)); }));
       },
       maskFeather: function (id) { var f = v(id, 'mask.feather') || 0; return [f * C.BLURK, f * C.BLURK]; },
       // Backdrop pieces (rectangles in comp space): [size], [centre], roundness.
@@ -481,8 +498,8 @@
     if (!italic) return w;
     return w === 'Regular' ? 'Italic' : `${w} Italic`;
   }
-  const TRANSFORM_KEYS = ['x', 'y', 'scale', 'scaleX', 'scaleY', 'rotation', 'opacity', 'blur', 'tracking'];
-  const TR_DEFAULT = { x: 0, y: 0, scale: 100, scaleX: 100, scaleY: 100, rotation: 0, opacity: 100, blur: 0, tracking: 0 };
+  const TRANSFORM_KEYS = ['x', 'y', 'scale', 'scaleX', 'scaleY', 'rotation', 'opacity', 'blur', 'tracking', 'anchorX', 'anchorY'];
+  const TR_DEFAULT = { x: 0, y: 0, scale: 100, scaleX: 100, scaleY: 100, rotation: 0, opacity: 100, blur: 0, tracking: 0, anchorX: 50, anchorY: 50 };
   const AE_SHAPE = { square: 1, rampUp: 2, rampDown: 3, triangle: 4, round: 5, smooth: 6 };
 
   // Keyframes for a Thirdline key list, converted to AE eases. Elastic and bounce curves (no
@@ -871,6 +888,13 @@
     for (const k of ['title', 'subtitle']) if (!CFG.L[k]) CFG.L[k] = { kind: k, on: false, name: k, anim: st[k].anim, vals: TR_DEFAULT };
     if (CFG.boxLayer && !CFG.L.backdrop) CFG.boxLayer = null;
     if (!CFG.boxLayer) CFG.L.backdrop = CFG.L.backdrop || { kind: 'backdrop', name: null, anim: bd.anim, vals: TR_DEFAULT };
+
+    // Parenting (Engine parentChain): only between layers that made it into the comp.
+    for (const id of Object.keys(CFG.L)) {
+      const p = (Engine.getLayer(st, id) || {}).parent;
+      if (p && CFG.L[p]) CFG.L[id].parent = p;
+      else if (p) warn(`${id} is parented to a hidden layer; the parent link was left out.`);
+    }
 
     // Fitted sizes: keep the export layout identical to the preview.
     if (fitted.title !== st.title && fitted.title.size !== st.title.size) warn('Auto-fit text is done with layer scale in After Effects.');
