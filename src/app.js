@@ -955,6 +955,18 @@
     return g;
   }
 
+  // Right-click an In/Out section to copy or paste that animation.
+  function animCtx(key, dir, sec) {
+    sec.addEventListener('contextmenu', (e) => {
+      if (/^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;
+      e.preventDefault(); ctxMenu.innerHTML = '';
+      ctxMenu.append(el('div', { class: 'ctx-title' }, `${layerName(key)} · ${dir === 'in' ? 'In' : 'Out'}`));
+      menuItem(`Copy ${dir === 'in' ? 'In' : 'Out'} animation`, () => copyAnim(key, dir));
+      menuItem(clip && clip.kind === 'anim' ? 'Paste animation here' : 'Paste animation', () => pasteAnim(key, dir), { disabled: !(clip && clip.kind === 'anim') });
+      placeMenu(e.clientX, e.clientY);
+    });
+    return sec;
+  }
   function animPanel(key) {
     const isBd = key === 'backdrop';
     const isText = key === 'title' || key === 'subtitle' || lay(key).kind === 'text';
@@ -989,18 +1001,18 @@
       transformSec,
       maskSec,
       animSec,
-      section(`${name} · In`, [
+      animCtx(key, 'in', section(`${name} · In`, [
         row({ label: 'Animation', type: 'select', path: `${base}.in.type`, options: groupedAnims(opts) }),
         row({ label: 'Start at', type: 'range', path: `${base}.in.delay`, min: 0, max: 10, step: 0.05, unit: 's' }),
         row({ label: 'Duration', type: 'range', path: `${base}.in.duration`, min: 0.05, max: 5, step: 0.05, unit: 's', show: (s) => lay(key).anim.in.type !== 'none' }),
         easingControl(`${base}.in`),
-      ]),
-      section(`${name} · Out`, [
+      ])),
+      animCtx(key, 'out', section(`${name} · Out`, [
         row({ label: 'Animation', type: 'select', path: `${base}.out.type`, options: groupedAnims({ ...opts, none: 'None (stay on screen)' }) }),
         row({ label: 'Duration', type: 'range', path: `${base}.out.duration`, min: 0.05, max: 5, step: 0.05, unit: 's', show: (s) => lay(key).anim.out.type !== 'none' }),
         row({ label: 'Ends before end', type: 'range', path: `${base}.out.offset`, min: 0, max: 5, step: 0.05, unit: 's' }),
         easingControl(`${base}.out`),
-      ]),
+      ])),
       section(`${name} · While on screen`, [
         row({ label: 'Loop', type: 'select', path: `${base}.loop.type`, options: Engine.LOOP_TYPES, onSet: () => changed({ sync: true }) }),
         row({ label: 'Amount', type: 'range', path: `${base}.loop.amount`, min: 5, max: 200, unit: '%', show: () => lay(key) && lay(key).anim.loop && lay(key).anim.loop.type !== 'none' }),
@@ -1138,7 +1150,13 @@
       currentOwner = owner;
       lay(key).animators.forEach((a, i) => {
         const ap = (k) => `${pp(key)}.animators.${i}.${k}`;
-        const box = el('div', { class: 'animator' },
+        const box = el('div', { class: 'animator', oncontextmenu: (e) => {
+          e.preventDefault(); ctxMenu.innerHTML = ''; ctxMenu.append(el('div', { class: 'ctx-title' }, a.name || `Animator ${i + 1}`));
+          menuItem('Copy this animator', () => copyAnimators(key, i));
+          if (lay(key).animators.length > 1) menuItem('Copy all animators', () => copyAnimators(key));
+          if (clip && clip.kind === 'animators') menuItem(`Paste ${clip.list.length} animator${clip.list.length > 1 ? 's' : ''}`, () => pasteAnimators(key));
+          placeMenu(e.clientX, e.clientY);
+        } },
           el('div', { class: 'animator-head' },
             el('b', {}, a.name || `Animator ${i + 1}`),
             el('button', { type: 'button', title: 'Delete this animator', onclick: () => { removeAnimator(key, i); changed({ sync: true }); } }, '✕')),
@@ -1318,7 +1336,8 @@
       const hidden = ly.visible === false;
       const icon = k === 'backdrop' ? '▭' : k === 'title' || k === 'subtitle' ? 'T' : KIND_ICON[ly.kind] || '■';
       const eye = el('button', { class: 'eye' + (hidden ? ' off' : ''), title: hidden ? 'Show layer' : 'Hide layer', onclick: (e) => { e.stopPropagation(); ly.visible = hidden; changed({ sync: true }); renderLayerList(); } }, '👁');
-      const rowEl = el('div', { class: 'layer-row' + (selected === k ? ' on' : '') + (multiSel.length > 1 && multiSel.includes(k) ? ' multi' : '') + (hidden ? ' hidden-layer' : ''), draggable: 'true', 'data-layer': k, onclick: (e) => { if (advanced && (e.shiftKey || e.metaKey || e.ctrlKey)) toggleMulti(k); else selectLayer(k); } },
+      const rowEl = el('div', { class: 'layer-row' + (selected === k ? ' on' : '') + (multiSel.length > 1 && multiSel.includes(k) ? ' multi' : '') + (hidden ? ' hidden-layer' : ''), draggable: 'true', 'data-layer': k, onclick: (e) => { if (advanced && (e.shiftKey || e.metaKey || e.ctrlKey)) toggleMulti(k); else selectLayer(k); },
+        oncontextmenu: (e) => { e.preventDefault(); if (!multiSel.includes(k)) selectLayer(k); openLayerMenu(e.clientX, e.clientY, k); } },
         ly.kind === 'group' ? el('span', { class: 'fold', title: 'Show or hide the layers in this group', onclick: (e) => { e.stopPropagation(); foldedGroups.has(k) ? foldedGroups.delete(k) : foldedGroups.add(k); layerSig = ''; renderLayerList(); } }, foldedGroups.has(k) ? '▸' : '▾') : null,
         el('span', { class: 'ic', style: `background:${color}` }, icon), el('span', { class: 'nm' }, name), eye,
         isExtra(k) ? el('button', { class: 'x', title: 'Delete layer', onclick: (e) => { e.stopPropagation(); deleteLayer(k); } }, '✕') : null);
@@ -2242,7 +2261,16 @@
   // Drag to move
   let dragging = false, dragStart = null;
   const toComp = (e) => { const r = preview.getBoundingClientRect(); return [((e.clientX - r.left) / r.width) * state.comp.width, ((e.clientY - r.top) / r.height) * state.comp.height]; };
+  preview.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    const [cx, cy] = toComp(e);
+    const hit = Engine.hitTest(lastLayout, cx, cy);
+    if (!hit) return;
+    if (hit !== selected && !multiSel.includes(hit)) selectLayer(hit);
+    openLayerMenu(e.clientX, e.clientY, hit);
+  });
   preview.addEventListener('pointerdown', (e) => {
+    if (e.button === 2) return;
     const [cx, cy] = toComp(e);
     const hit = Engine.hitTest(lastLayout, cx, cy);
     if (advanced && hit && selected && hit !== selected && (e.shiftKey || e.metaKey || e.ctrlKey)) { toggleMulti(hit); return; }
@@ -2923,17 +2951,33 @@
   const ctxMenu = el('div', { class: 'ctxmenu', hidden: '' });
   document.body.append(ctxMenu);
   const closeMenu = () => { ctxMenu.hidden = true; };
+  const menuItem = (label, fn, { on = false, disabled = false } = {}) => {
+    const b = el('button', { class: on ? 'on' : '' }, label);
+    b.disabled = disabled;
+    b.onclick = () => { closeMenu(); fn(); };
+    ctxMenu.append(b);
+  };
+  const menuSep = () => { if (ctxMenu.lastChild && ctxMenu.lastChild.tagName !== 'HR') ctxMenu.append(el('hr')); };
+  function placeMenu(x, y) {
+    if (ctxMenu.lastChild && ctxMenu.lastChild.tagName === 'HR') ctxMenu.lastChild.remove();
+    ctxMenu.hidden = false;
+    const r = ctxMenu.getBoundingClientRect();
+    ctxMenu.style.left = `${Math.min(x, innerWidth - r.width - 6)}px`;
+    ctxMenu.style.top = `${Math.max(6, Math.min(y, innerHeight - r.height - 6))}px`;
+  }
+  // Right-click on a layer (list, preview, timeline row): copy / paste / duplicate / delete.
+  function openLayerMenu(x, y, key) {
+    ctxMenu.innerHTML = '';
+    ctxMenu.append(el('div', { class: 'ctx-title' }, key ? layerName(key) : 'Timeline'));
+    if (key) layerClipItems(key);
+    else pasteItems(null);
+    placeMenu(x, y);
+  }
   function openMenu(x, y, hit) {
     const T = easeTarget(hit);
     ctxMenu.innerHTML = '';
     ctxMenu.append(el('div', { class: 'ctx-title' }, T.title));
-    const item = (label, fn, { on = false, disabled = false } = {}) => {
-      const b = el('button', { class: on ? 'on' : '' }, label);
-      b.disabled = disabled;
-      b.onclick = () => { closeMenu(); fn(); };
-      ctxMenu.append(b);
-    };
-    const sep = () => ctxMenu.append(el('hr'));
+    const item = menuItem, sep = menuSep;
     ctxMenu.append(el('div', { class: 'ctx-sub' }, 'Easing'));
     // On a multi-selection the easing goes to every selected keyframe.
     const setAll = (ez) => { T.set(ez); if (hit.kind === 'key' && isSelKey(hit.k)) for (const s of selKeys) if (s.k !== hit.k) s.k.e = ez; changed({ sync: true }); };
@@ -2946,17 +2990,24 @@
     item(hit.kind === 'key' ? (isSelKey(hit.k) && selKeys.length > 1 ? `Delete ${selKeys.length} keyframes` : 'Delete keyframe') : 'Remove animation', () => {
       if (hit.kind === 'key') { if (isSelKey(hit.k)) deleteSelectedKeys(); else { removeKey(hit.path, hit.k); changed({ sync: true }); updateKeyBar(); } } else deletePreset(hit.key, hit.dir);
     });
-    ctxMenu.hidden = false;
-    const r = ctxMenu.getBoundingClientRect();
-    ctxMenu.style.left = `${Math.min(x, innerWidth - r.width - 6)}px`;
-    ctxMenu.style.top = `${Math.max(6, Math.min(y, innerHeight - r.height - 6))}px`;
+    sep();
+    if (hit.kind === 'key') item(selKeys.length > 1 ? `Copy ${selKeys.length} keyframes` : 'Copy keyframe', () => copySelection());
+    else item(`Copy ${hit.dir === 'in' ? 'In' : 'Out'} animation`, () => copyAnim(hit.key, hit.dir));
+    pasteItems(hit.kind === 'key' ? pathLayer(hit.path) : hit.key, hit.kind === 'preset' ? hit.dir : null);
+    placeMenu(x, y);
   }
   tl.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     if (!advanced) return;
     const r = tl.getBoundingClientRect();
     const hit = timelineHit(e.clientX - r.left, e.clientY - r.top);
-    if (!hit) return closeMenu();
+    if (!hit) {
+      const row = rowAt(timelineRows(), e.clientY - r.top);
+      const key = row && (row.type === 'bar' ? row.key : row.type === 'key' ? row.layer : null);
+      const k = key && layerColor(key) ? key : null;
+      if (k && selected !== k) selectLayer(k);
+      return openLayerMenu(e.clientX, e.clientY, k);
+    }
     selectHit(hit);
     openMenu(e.clientX, e.clientY, hit);
   });
@@ -3704,6 +3755,67 @@
     changed({ sync: true });
     selectLayer(id);
     toast(`Added “${ly.name}”`);
+  }
+  // Animations (a layer's In or Out preset) and text animators copy and paste between layers too.
+  const animOpts = (key) => (key === 'title' || key === 'subtitle' || lay(key).kind === 'text' ? TEXT_ANIMS : BACKDROP_ANIMS);
+  function copyAnim(key, dir) {
+    clip = { kind: 'anim', from: key, dir, data: clone(lay(key).anim[dir]) };
+    toast(`Copied ${layerName(key)} ${dir === 'in' ? 'In' : 'Out'} animation`);
+  }
+  function pasteAnim(key, dir) {
+    const d = clip.data;
+    if (d.type !== 'none' && !animOpts(key)[d.type]) return toast(`“${d.type}” isn’t available on ${layerName(key)}`);
+    const a = lay(key).anim[dir];
+    const keep = { delay: a.delay, offset: a.offset }; // timing stays where this layer had it
+    lay(key).anim[dir] = { ...clone(d), ...Object.fromEntries(Object.entries(keep).filter(([, v]) => v !== undefined)) };
+    delete lay(key).anim[dir][dir === 'in' ? 'offset' : 'delay'];
+    if (keep[dir === 'in' ? 'delay' : 'offset'] === undefined) lay(key).anim[dir][dir === 'in' ? 'delay' : 'offset'] = d.delay ?? d.offset ?? 0;
+    changed({ sync: true }); drawTimeline();
+    toast(`Pasted onto ${layerName(key)} ${dir === 'in' ? 'In' : 'Out'}`);
+  }
+  const isTextLayer = (key) => key === 'title' || key === 'subtitle' || (lay(key) && lay(key).kind === 'text');
+  function copyAnimators(key, only) {
+    const all = lay(key).animators || [];
+    const idx = only == null ? all.map((_, i) => i) : [only];
+    if (!idx.length) return toast('This layer has no text animators');
+    const pre = `${pp(key)}.animators.`;
+    clip = { kind: 'animators', list: idx.map((i) => clone(all[i])),
+      keys: idx.map((i) => Object.fromEntries(Object.entries(state.keys || {}).filter(([p]) => p.startsWith(`${pre}${i}.`)).map(([p, ks]) => [p.slice(`${pre}${i}.`.length), clone(ks)]))) };
+    toast(`Copied ${idx.length} animator${idx.length > 1 ? 's' : ''}`);
+  }
+  function pasteAnimators(key) {
+    if (!isTextLayer(key)) return toast('Text animators only go on text layers');
+    const list = (lay(key).animators ??= []);
+    clip.list.forEach((a, j) => {
+      list.push(clone(a));
+      const i = list.length - 1;
+      for (const [rest, ks] of Object.entries(clip.keys[j] || {})) { state.keys ??= {}; state.keys[`${pp(key)}.animators.${i}.${rest}`] = clone(ks); }
+    });
+    changed({ sync: true });
+    toast(`Pasted ${clip.list.length} animator${clip.list.length > 1 ? 's' : ''} onto ${layerName(key)}`);
+  }
+  // The "Paste …" entries that fit what's on the clipboard, for a layer (and an In/Out slot).
+  function pasteItems(key, dir) {
+    if (!clip) return menuItem('Paste', () => {}, { disabled: true });
+    if (clip.kind === 'keys') menuItem(`Paste ${clip.items.length} keyframe${clip.items.length > 1 ? 's' : ''} at playhead`, () => { if (key && selected !== key) selectLayer(key); pasteKeys(); });
+    if (clip.kind === 'layer') menuItem(`Paste layer “${clip.layer.name || layerName(clip.from)}”`, () => pasteLayer());
+    if (clip.kind === 'anim' && key) {
+      if (dir) menuItem(`Paste animation onto ${dir === 'in' ? 'In' : 'Out'}`, () => pasteAnim(key, dir));
+      else { menuItem('Paste animation as In', () => pasteAnim(key, 'in')); menuItem('Paste animation as Out', () => pasteAnim(key, 'out')); }
+    }
+    if (clip.kind === 'animators' && key) menuItem(`Paste ${clip.list.length} text animator${clip.list.length > 1 ? 's' : ''}`, () => pasteAnimators(key), { disabled: !isTextLayer(key) });
+  }
+  function layerClipItems(key) {
+    const ex = isExtra(key);
+    if (key !== 'backdrop') menuItem('Copy layer', () => { if (selected !== key) selectLayer(key); (selKey = null, selKeys = []); copySelection(); });
+    if (lay(key).anim.in.type !== 'none') menuItem('Copy In animation', () => copyAnim(key, 'in'));
+    if (lay(key).anim.out.type !== 'none') menuItem('Copy Out animation', () => copyAnim(key, 'out'));
+    if (isTextLayer(key) && (lay(key).animators || []).length) menuItem('Copy text animators', () => copyAnimators(key));
+    menuSep();
+    pasteItems(key, null);
+    menuSep();
+    if (key !== 'backdrop') menuItem('Duplicate', () => { if (selected !== key) selectLayer(key); (selKey = null, selKeys = []); duplicateSelection(); });
+    if (ex) menuItem('Delete layer', () => deleteLayer(key));
   }
   function duplicateSelection() {
     if (selKeys.length) { const keep = clip; if (copySelection()) { setTime(Math.min(state.comp.duration, Math.max(...selKeys.map((s) => s.k.t)) + 1 / state.comp.fps)); pasteKeys(); } clip = keep; return; }
