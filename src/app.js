@@ -1087,6 +1087,12 @@
       // out ramp
       g.beginPath(); g.moveTo(x2, y + 2); g.lineTo(x3, y + 20); g.lineTo(x2, y + 20); g.fill();
       g.fillStyle = color + 'aa'; g.fillRect(x1, y + 14, Math.max(0, x2 - x1), 6);
+      // grips: in/out points (outer) and transition-length handles (inner)
+      g.fillStyle = '#ffffffcc';
+      for (const gx of [x0, x3]) g.fillRect(gx - 1, y + 2, 2, 18);
+      g.fillStyle = '#ffffff70';
+      if (state[key].anim.in.type !== 'none') g.fillRect(x1 - 1, y + 4, 2, 14);
+      if (state[key].anim.out.type !== 'none') g.fillRect(x2 - 1, y + 4, 2, 14);
       g.globalAlpha = 1;
     });
     // Keyframe rows (Advanced)
@@ -1114,7 +1120,7 @@
     g.strokeStyle = '#fff'; g.lineWidth = 1.5; g.beginPath(); g.moveTo(px, 0); g.lineTo(px, h); g.stroke(); g.lineWidth = 1;
     g.fillStyle = '#fff'; g.beginPath(); g.moveTo(px - 5, 0); g.lineTo(px + 5, 0); g.lineTo(px, 7); g.fill();
     g.fillStyle = '#596176'; g.font = '10px -apple-system, sans-serif';
-    if (!rows.length) g.fillText('Drag a bar to retime it · drag its start or end ramp to move only that part', TL.left, h - 6);
+    if (!rows.length) g.fillText('Ramp: transition length · outer edge: in/out point · middle: move layer', TL.left, h - 6);
   }
   tl.addEventListener('pointerdown', (e) => {
     const { sx, st } = tlGeom();
@@ -1146,11 +1152,8 @@
       const key = TRACKS[i][0]; const a = state[key].anim;
       const sp = Engine.timingSpans(a, state.comp.duration);
       const x0 = sx(sp.inStart), x1 = sx(sp.inEnd), x2 = sx(sp.outStart), x3 = sx(sp.outEnd);
-      let mode = null;
-      if (mx >= x0 - 4 && mx <= Math.max(x1, x0 + 8)) mode = 'in';
-      else if (mx >= Math.min(x2, x3 - 8) && mx <= x3 + 4) mode = 'out';
-      else if (mx > x1 && mx < x2) mode = 'both';
-      if (mode) { tlDrag = { key, mode, t0: st(mx), delay: a.in.delay, offset: a.out.offset }; return; }
+      const mode = barHit(mx, x0, x1, x2, x3, a);
+      if (mode) { tlDrag = { key, mode, t0: st(mx), delay: a.in.delay, offset: a.out.offset, inDur: a.in.duration, outDur: a.out.duration }; return; }
     }
     tlDrag = { scrub: true }; setPlaying(false); setTime(st(mx));
   });
@@ -1170,9 +1173,40 @@
     const r2 = (v) => Math.round(Math.max(0, v) * 100) / 100;
     if (tlDrag.mode === 'in' || tlDrag.mode === 'both') a.in.delay = r2(Math.min(tlDrag.delay + dt, D - 0.1));
     if (tlDrag.mode === 'out' || tlDrag.mode === 'both') a.out.offset = r2(Math.min(tlDrag.offset - dt, D - 0.1));
+    // Dragging the ramp itself stretches the transition: in grows to the right, out grows to the left.
+    if (tlDrag.mode === 'inDur') a.in.duration = Math.max(0.05, r2(Math.min(tlDrag.inDur + dt, D - a.in.delay)));
+    if (tlDrag.mode === 'outDur') a.out.duration = Math.max(0.05, r2(Math.min(tlDrag.outDur - dt, D - a.out.offset)));
     changed({ sync: true });
   });
   tl.addEventListener('pointerup', () => (tlDrag = null));
+  // Which part of a layer bar is under the mouse:
+  //  outer end of a ramp → move the in/out point; the ramp (graph) itself → change that transition's duration;
+  //  the hold section → move the whole layer.
+  function barHit(mx, x0, x1, x2, x3, a) {
+    const E = 6;
+    const hasIn = a.in.type !== 'none', hasOut = a.out.type !== 'none';
+    if (Math.abs(mx - x0) <= E) return 'in';
+    if (Math.abs(mx - x3) <= E) return 'out';
+    if (hasIn && mx > x0 + E && mx <= x1 + E) return 'inDur';
+    if (hasOut && mx >= x2 - E && mx < x3 - E) return 'outDur';
+    if (mx > x1 && mx < x2) return 'both';
+    return null;
+  }
+  tl.addEventListener('pointermove', (e) => {
+    if (tlDrag) return;
+    const { sx } = tlGeom(); const r = tl.getBoundingClientRect();
+    const mx = e.clientX - r.left, my = e.clientY - r.top;
+    const i = Math.floor((my - TL.ruler - 6) / TL.rowH);
+    let cur = 'pointer', tip = '';
+    if (mx >= TL.left && my > TL.ruler && i >= 0 && i < TRACKS.length) {
+      const a = state[TRACKS[i][0]].anim;
+      const sp = Engine.timingSpans(a, state.comp.duration);
+      const m = barHit(mx, sx(sp.inStart), sx(sp.inEnd), sx(sp.outStart), sx(sp.outEnd), a);
+      cur = { in: 'col-resize', out: 'col-resize', inDur: 'ew-resize', outDur: 'ew-resize', both: 'grab' }[m] || 'pointer';
+      tip = { in: 'Drag to move the in point', out: 'Drag to move the out point', inDur: 'Drag to change the in transition length', outDur: 'Drag to change the out transition length', both: 'Drag to move the whole layer in time' }[m] || '';
+    }
+    tl.style.cursor = cur; tl.title = tip;
+  });
   new ResizeObserver(drawTimeline).observe(tl);
 
   // ---------- Keyframe inspector bar ----------
