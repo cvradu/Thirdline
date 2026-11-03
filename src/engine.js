@@ -502,6 +502,11 @@
     const anim = bd.gradAnim || 'none';
     const ph = anim === 'none' ? 0 : ((curT / Math.max(0.1, bd.gradSpeed || 4)) % 1 + 1) % 1;
     const c1 = bd.fill, c2 = bd.fill2 || bd.fill, c3 = bd.fill3 || c2, c4 = bd.fill4 || c1;
+    // Linear / radial gradients run through 2–4 evenly spaced colours.
+    const n = Math.max(2, Math.min(4, Math.round(bd.gradStops || 2)));
+    const ramp = [c1, c2, c3, c4].slice(0, n);
+    const at = (u) => { const x = Math.max(0, Math.min(1, u)) * (n - 1), i = Math.min(n - 2, Math.floor(x)); return mixHex(ramp[i], ramp[i + 1], x - i); };
+    const addRamp = (g) => ramp.forEach((c, i) => g.addColorStop(i / (n - 1), c));
     let style = c1, overlay = null;
     if (type === 'linear') {
       const ang = (((bd.gradientAngle || 0) + (anim === 'rotate' ? ph * 360 : 0)) * Math.PI) / 180;
@@ -510,12 +515,13 @@
       const dx = Math.cos(ang) * half, dy = Math.sin(ang) * half;
       const g = ctx.createLinearGradient(cx - dx, cy - dy, cx + dx, cy + dy);
       if (anim === 'slide') {
-        // Seamless flowing c1 → c2 → c1 band
-        for (let i = 0; i <= 12; i++) {
-          const u = i / 12, w = ((u * 0.5 - ph) % 1 + 1) % 1;
-          g.addColorStop(u, mixHex(c1, c2, 1 - Math.abs(2 * w - 1)));
+        // Seamless flowing band through the colours and back
+        const k = 6 * n;
+        for (let i = 0; i <= k; i++) {
+          const u = i / k, w = ((u * 0.5 - ph) % 1 + 1) % 1;
+          g.addColorStop(u, at(1 - Math.abs(2 * w - 1)));
         }
-      } else { g.addColorStop(0, c1); g.addColorStop(1, c2); }
+      } else addRamp(g);
       style = g;
     } else if (type === 'radial') {
       let cx = b.x + ((bd.gradCX ?? 50) / 100) * b.w, cy = b.y + ((bd.gradCY ?? 50) / 100) * b.h;
@@ -523,7 +529,7 @@
       if (anim === 'orbit') { cx += Math.cos(ph * 2 * Math.PI) * b.w * 0.3; cy += Math.sin(ph * 2 * Math.PI) * b.h * 0.3; }
       if (anim === 'pulse') r *= 0.7 + 0.3 * (0.5 + 0.5 * Math.sin(ph * 2 * Math.PI));
       const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(1, r));
-      g.addColorStop(0, c1); g.addColorStop(1, c2);
+      addRamp(g);
       style = g;
     } else if (type === 'fourPoint') {
       let cs = [c1, c2, c3, c4];

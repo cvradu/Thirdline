@@ -34,6 +34,7 @@
         gradCY: 50,
         gradRadius: 75,
         gradAnim: 'none',
+        gradStops: 2,
         gradSpeed: 4,
         shimmerColor: '#ffffff',
         shimmerOpacity: 0.45,
@@ -140,14 +141,15 @@
 
   // Sample gradient looks for the backdrop (applied on top of the current design).
   const GRADIENTS = [
-    { name: 'Sunset flow', patch: { fillType: 'linear', fill: '#f97316', fill2: '#db2777', gradientAngle: 0, gradAnim: 'slide', gradSpeed: 5 } },
-    { name: 'Neon spin', patch: { fillType: 'linear', fill: '#7c3aed', fill2: '#06b6d4', gradientAngle: 0, gradAnim: 'rotate', gradSpeed: 6 } },
-    { name: 'Gold shimmer', patch: { fillType: 'linear', fill: '#a16207', fill2: '#facc15', gradientAngle: 20, gradAnim: 'shimmer', gradSpeed: 3, shimmerColor: '#fffbeb', shimmerOpacity: 0.6 } },
-    { name: 'Ocean pulse', patch: { fillType: 'radial', fill: '#22d3ee', fill2: '#0c4a6e', gradCX: 30, gradCY: 50, gradRadius: 90, gradAnim: 'pulse', gradSpeed: 3 } },
-    { name: 'Midnight orbit', patch: { fillType: 'radial', fill: '#6366f1', fill2: '#020617', gradCX: 50, gradCY: 50, gradRadius: 70, gradAnim: 'orbit', gradSpeed: 6 } },
+    { name: 'Sunset flow', patch: { fillType: 'linear', gradStops: 2, fill: '#f97316', fill2: '#db2777', gradientAngle: 0, gradAnim: 'slide', gradSpeed: 5 } },
+    { name: 'Neon spin', patch: { fillType: 'linear', gradStops: 2, fill: '#7c3aed', fill2: '#06b6d4', gradientAngle: 0, gradAnim: 'rotate', gradSpeed: 6 } },
+    { name: 'Gold shimmer', patch: { fillType: 'linear', gradStops: 2, fill: '#a16207', fill2: '#facc15', gradientAngle: 20, gradAnim: 'shimmer', gradSpeed: 3, shimmerColor: '#fffbeb', shimmerOpacity: 0.6 } },
+    { name: 'Ocean pulse', patch: { fillType: 'radial', gradStops: 2, fill: '#22d3ee', fill2: '#0c4a6e', gradCX: 30, gradCY: 50, gradRadius: 90, gradAnim: 'pulse', gradSpeed: 3 } },
+    { name: 'Midnight orbit', patch: { fillType: 'radial', gradStops: 2, fill: '#6366f1', fill2: '#020617', gradCX: 50, gradCY: 50, gradRadius: 70, gradAnim: 'orbit', gradSpeed: 6 } },
     { name: 'Aurora swirl', patch: { fillType: 'fourPoint', fill: '#22c55e', fill2: '#06b6d4', fill3: '#7c3aed', fill4: '#0f172a', gradAnim: 'swirl', gradSpeed: 6 } },
     { name: 'Candy breathe', patch: { fillType: 'fourPoint', fill: '#f472b6', fill2: '#fb923c', fill3: '#a78bfa', fill4: '#38bdf8', gradAnim: 'breathe', gradSpeed: 4 } },
-    { name: 'Steel (static)', patch: { fillType: 'linear', fill: '#334155', fill2: '#0f172a', gradientAngle: 90, gradAnim: 'none' } },
+    { name: 'Tricolour sweep', patch: { fillType: 'linear', gradStops: 3, fill: '#2563eb', fill2: '#a855f7', fill3: '#ec4899', gradientAngle: 0, gradAnim: 'slide', gradSpeed: 6 } },
+    { name: 'Steel (static)', patch: { fillType: 'linear', gradStops: 2, fill: '#334155', fill2: '#0f172a', gradientAngle: 90, gradAnim: 'none' } },
   ];
 
   function deepMerge(base, patch) {

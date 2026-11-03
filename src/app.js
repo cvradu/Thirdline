@@ -562,6 +562,18 @@
   const shapeIn = (...names) => (s) => isShape(s) && names.includes(s.backdrop.shape);
   const usesAccent = shapeIn('accent', 'twoTone', 'underline', 'sideBar', 'corners');
   const usesFill = (s) => isShape(s) && !['underline', 'sideBar', 'corners'].includes(s.backdrop.shape);
+  // Linear / radial: a count (2–4) and a picker for each colour (1 = start … last = end).
+  function gradColourRows(keyed) {
+    const lin = (s) => usesFill(s) && (ft(s) === 'linear' || ft(s) === 'radial');
+    const n = (s) => Math.max(2, Math.min(4, Math.round(s.backdrop.gradStops || 2)));
+    const paths = ['fill', 'fill2', 'fill3', 'fill4'];
+    return [
+      row({ label: 'Colours', type: 'select', path: 'backdrop.gradStops', numeric: true, options: { 2: '2', 3: '3', 4: '4' }, show: lin,
+        onSet: (v) => { const b = state.backdrop; for (let i = 2; i < v; i++) if (!b[paths[i]]) b[paths[i]] = mix(b[paths[i - 1]] || b.fill, '#ffffff', 0.35); changed({ sync: true }); } }),
+      ...paths.map((p, i) => row({ label: `Colour ${i + 1}`, type: 'color', path: `backdrop.${p}`, key: keyed, keyLabel: `Gradient colour ${i + 1}`, swatches: keyed ? undefined : false,
+        show: (s) => lin(s) && i < n(s) })),
+    ];
+  }
   const ft = (s) => s.backdrop.fillType || (s.backdrop.gradient ? 'linear' : 'solid');
 
   // Built-in procedural textures (generated once, stored as PNG data URLs)
@@ -651,8 +663,7 @@
           });
           ctl.append(sel);
         } }),
-        row({ label: 'Colour 1', type: 'color', path: 'backdrop.fill', key: true, keyLabel: 'Gradient colour 1', show: (s) => usesFill(s) && ft(s) !== 'solid' && ft(s) !== 'fourPoint' }),
-        row({ label: 'Colour 2', type: 'color', path: 'backdrop.fill2', key: true, keyLabel: 'Gradient colour 2', show: (s) => usesFill(s) && ft(s) !== 'solid' && ft(s) !== 'fourPoint' }),
+        ...gradColourRows(true),
         row({ label: 'Top left', type: 'color', path: 'backdrop.fill', key: true, keyLabel: 'Corner colour TL', show: (s) => usesFill(s) && ft(s) === 'fourPoint' }),
         row({ label: 'Top right', type: 'color', path: 'backdrop.fill2', key: true, keyLabel: 'Corner colour TR', show: (s) => usesFill(s) && ft(s) === 'fourPoint' }),
         row({ label: 'Bottom right', type: 'color', path: 'backdrop.fill3', key: true, keyLabel: 'Corner colour BR', show: (s) => usesFill(s) && ft(s) === 'fourPoint' }),
@@ -1506,7 +1517,11 @@
           sel.addEventListener('change', () => { if (sel.value === '') return; Object.assign(state.backdrop, Presets.GRADIENTS[+sel.value].patch); sel.value = ''; changed({ sync: true }); queueGallery(); });
           ctl.append(sel);
         } }),
-        row({ label: 'Second colour', type: 'color', path: 'backdrop.fill2', show: (s) => usesFill(s) && ft(s) !== 'solid', swatches: false }),
+        ...gradColourRows(false),
+        row({ label: 'Top left', type: 'color', path: 'backdrop.fill', show: (s) => usesFill(s) && ft(s) === 'fourPoint', swatches: false }),
+        row({ label: 'Top right', type: 'color', path: 'backdrop.fill2', show: (s) => usesFill(s) && ft(s) === 'fourPoint', swatches: false }),
+        row({ label: 'Bottom right', type: 'color', path: 'backdrop.fill3', show: (s) => usesFill(s) && ft(s) === 'fourPoint', swatches: false }),
+        row({ label: 'Bottom left', type: 'color', path: 'backdrop.fill4', show: (s) => usesFill(s) && ft(s) === 'fourPoint', swatches: false }),
         row({ label: 'Texture', type: 'custom', show: (s) => s.backdrop.type !== 'none', render: (ctl) => {
           const sel = el('select');
           fillSelect(sel, [['', 'None'], ...Object.entries(BUILTIN_TEXTURES).map(([k, v]) => [k, v[0]])]);

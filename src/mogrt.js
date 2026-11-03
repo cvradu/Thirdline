@@ -807,13 +807,14 @@
         } else {
           gradFx.push({ match: 'ADBE Ramp', name: 'TL Gradient', params: [
             { sel: 'TwoD:0', ...exprCall("T.grad('start')") }, { sel: 'COLOR:0', value: [...hexRGB(bd.fill), 1], eg: 'Gradient start' },
-            { sel: 'TwoD:1', ...exprCall("T.grad('end')") }, { sel: 'COLOR:1', value: [...hexRGB(bd.fill2 || bd.fill), 1], eg: 'Gradient end' },
+            { sel: 'TwoD:1', ...exprCall("T.grad('end')") }, { sel: 'COLOR:1', value: [...hexRGB([bd.fill, bd.fill2, bd.fill3, bd.fill4][Math.max(2, Math.min(4, bd.gradStops || 2)) - 1] || bd.fill2 || bd.fill), 1], eg: 'Gradient end' },
             { sel: 'OneD:0', value: ft === 'radial' ? 2 : 1 }] });
         }
         // Gradient effects fill the whole layer; Set Matte puts the box's own shape back.
         gradFx.push({ match: 'ADBE Set Matte3', name: 'TL Keep shape', params: [{ sel: 'LAYER_INDEX:0', self: true }] });
         main.forEach((g) => { if (g.fill.eg === 'Backdrop colour') g.fill.eg = null; });
         if (bd.gradAnim && bd.gradAnim !== 'none') warn('Animated gradients are exported as still gradients.');
+        if ((ft === 'linear' || ft === 'radial') && (bd.gradStops || 2) > 2) warn('After Effects’ Gradient Ramp has two colours: the gradient goes from colour 1 to the last colour.');
       }
       if (bd.texture && bd.texture.enabled) warn('Texture overlays are not exported.');
 
