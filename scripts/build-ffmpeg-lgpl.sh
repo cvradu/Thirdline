@@ -39,7 +39,7 @@ rm -rf "build-ff-$ARCH" && mkdir "build-ff-$ARCH" && cd "build-ff-$ARCH"
 CROSS=()
 [ "$ARCH" != "$(uname -m)" ] && CROSS=(--enable-cross-compile --target-os=darwin)
 PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" "../ffmpeg-$FFMPEG_VERSION/configure" \
-  --prefix="$PREFIX" --arch="$FF_ARCH" "${CROSS[@]}" \
+  --prefix="$PREFIX" --arch="$FF_ARCH" ${CROSS[@]+"${CROSS[@]}"} \
   --cc="clang" --extra-cflags="$CFLAGS_ARCH -I$PREFIX/include" --extra-ldflags="$CFLAGS_ARCH -L$PREFIX/lib" \
   --pkg-config-flags=--static \
   --enable-static --disable-shared --disable-autodetect \
