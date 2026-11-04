@@ -1,0 +1,23 @@
+Thirdline
+Copyright (c) 2026 the Thirdline author (GitHub: cvradu). All rights reserved.
+
+This software and its source code are proprietary and confidential.
+No part of it may be copied, modified, distributed, sublicensed, sold,
+or used to create derivative works without the prior written permission
+of the copyright holder. Use of released builds of Thirdline is governed
+by the end-user licence agreement (EULA) that accompanies them.
+
+Versions of Thirdline up to and including 0.13.5 were published under the
+MIT licence; those earlier copies remain available under that licence.
+This notice applies to all later versions.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED. IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM,
+DAMAGES OR OTHER LIABILITY ARISING FROM THE USE OF THE SOFTWARE.
+
+Third-party components keep their own licences:
+- Bundled fonts: SIL Open Font License 1.1 (see src/fonts/LICENSE.txt).
+- ffmpeg: the Mac app bundles an LGPL-only build (scripts/build-ffmpeg-lgpl.sh);
+  development installs use ffmpeg-static (GPL). See https://ffmpeg.org/legal.html.
+- Electron and other open-source dependencies: see their own licence files
+  in node_modules.

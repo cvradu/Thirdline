@@ -10,7 +10,7 @@
     "dist:win": "electron-builder --win",
     "dist:linux": "electron-builder --linux"
   },
-  "license": "MIT",
+  "license": "SEE LICENSE IN LICENSE",
   "dependencies": {
     "ffmpeg-static": "^5.2.0"
   },

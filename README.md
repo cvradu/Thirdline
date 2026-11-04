@@ -82,7 +82,7 @@ Space play/pause · ←/→ step a frame · Home go to start · J/K previous/nex
 
 ## Licences
 
-Bundled fonts: SIL Open Font License 1.1 (see `src/fonts/LICENSE.txt`). The Mac app ships an LGPL-only ffmpeg built by `scripts/build-ffmpeg-lgpl.sh` (libvpx for VP9, Apple VideoToolbox for H.264, no libx264); development installs use `ffmpeg-static` (GPL). Third-party notices are in `src/help/licenses.html` (Help › Third-Party Licences).
+App code: proprietary, all rights reserved (see `LICENSE`; versions up to 0.13.5 were MIT). Bundled fonts: SIL Open Font License 1.1 (see `src/fonts/LICENSE.txt`). The Mac app ships an LGPL-only ffmpeg built by `scripts/build-ffmpeg-lgpl.sh` (libvpx for VP9, Apple VideoToolbox for H.264, no libx264); development installs use `ffmpeg-static` (GPL). Third-party notices are in `src/help/licenses.html` (Help › Third-Party Licences).
 
 ## Shipping settings (`app-config.json`)
 
