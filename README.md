@@ -76,4 +76,4 @@ Space play/pause · ←/→ step a frame · Home go to start · Cmd/Ctrl+Z undo 
 
 ## Licences
 
-App code: MIT. Bundled fonts: SIL Open Font License 1.1 (see `src/fonts/LICENSE.txt`). ffmpeg is distributed under the GPL via `ffmpeg-static`.
+App code: proprietary, all rights reserved (see `LICENSE`; versions up to 0.13.5 were MIT). Bundled fonts: SIL Open Font License 1.1 (see `src/fonts/LICENSE.txt`). ffmpeg is distributed under the GPL via `ffmpeg-static`.
