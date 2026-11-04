@@ -1,0 +1,16 @@
+{
+  "licensing": {
+    "enforce": false,
+    "provider": "lemonsqueezy",
+    "storeId": null,
+    "buyUrl": "",
+    "trialDays": 14
+  },
+  "updates": {
+    "repo": "cvradu/Thirdline"
+  },
+  "support": {
+    "email": "",
+    "url": "https://github.com/cvradu/Thirdline/issues/new"
+  }
+}

@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'" />
+  <title>Thirdline User Guide</title>
+  <link rel="stylesheet" href="help.css" />
+</head>
+<body>
+<div class="wrap">
+  <nav>
+    <div class="brand"><span>▁▃</span> Thirdline guide</div>
+    <a href="#start">Your first lower third</a>
+    <a href="#easy">Easy mode</a>
+    <a href="#export">Exporting</a>
+    <a href="#editors">Using it in your editor</a>
+    <a href="#projects">Projects, styles and brands</a>
+    <a href="#advanced">Advanced mode</a>
+    <a href="#timeline">Timeline and keyframes</a>
+    <a href="#layers">Layers, masks and the pen</a>
+    <a href="#batch">Batch export from a spreadsheet</a>
+    <a href="#live">Live output for OBS</a>
+    <a href="#mogrt">.mogrt for Premiere</a>
+    <a href="#fonts">Fonts</a>
+    <a href="#trouble">Troubleshooting</a>
+    <a href="#keys">Keyboard shortcuts</a>
+    <a href="licenses.html">Third-party licences</a>
+  </nav>
+  <main>
+    <h1>Thirdline User Guide</h1>
+    <p class="lead">Thirdline makes animated lower thirds (the name-and-title graphics at the bottom of a video) and exports them with a transparent background, ready to drop on top of your footage.</p>
+
+    <h2 id="start">Your first lower third (2 minutes)</h2>
+    <ol>
+      <li><b>Pick a style.</b> On the start screen, or in step 1 of Easy mode, click any style. The filters at the top (News, Podcast, Sport…) narrow the list. Thumbnails show your own text.</li>
+      <li><b>Type your text.</b> Fill in the name and title in step 2, or double-click the text in the preview.</li>
+      <li><b>Choose how it moves.</b> Step 3 sets the in and out animation, the speed and how long it stays on screen. Drag the In / Hold / Out bar to change the timing.</li>
+      <li><b>Place it.</b> Drag it in the preview. It snaps to the title-safe and action-safe guides; hold <kbd>Alt</kbd> to move without snapping.</li>
+      <li><b>Export.</b> Click <b>Export…</b>, pick the app you edit in under <i>Made for</i>, and choose where to save. You get a video with a transparent background.</li>
+    </ol>
+    <p class="tip">Press <kbd>Space</kbd> to play the animation. Press <kbd>`</kbd> to hide the guides and see it clean.</p>
+
+    <h2 id="easy">Easy mode</h2>
+    <p>Easy mode is for getting a good-looking graphic fast, without any animation knowledge. Everything happens in three steps on the left and right panels.</p>
+    <ul>
+      <li><b>Fonts and colours:</b> pick a font pairing and the three main colours. Any font installed on your computer is available, or upload a <code>.ttf</code>, <code>.otf</code>, <code>.woff</code> or <code>.woff2</code> file.</li>
+      <li><b>Per-part animation:</b> the backdrop, the name and the title can each have their own in and out animation.</li>
+      <li><b>While on screen:</b> a gentle pulse, float, drift or breathe keeps long holds from looking frozen.</li>
+      <li><b>Preview on footage:</b> choose <i>Preview on</i> and pick a video or image (or drop one on the preview) to see the graphic over real footage. Footage is never exported.</li>
+    </ul>
+
+    <h2 id="export">Exporting</h2>
+    <table>
+      <tr><th>Format</th><th>Transparency</th><th>Best for</th></tr>
+      <tr><td>MOV · ProRes 4444</td><td>Yes</td><td>Premiere Pro, Final Cut Pro, DaVinci Resolve, After Effects</td></tr>
+      <tr><td>WebM · VP9</td><td>Yes</td><td>OBS, vMix, web players. Small files.</td></tr>
+      <tr><td>PNG sequence</td><td>Yes</td><td>Anything that reads image sequences. One PNG per frame.</td></tr>
+      <tr><td>MP4 · H.264</td><td>No</td><td>Social video. Rendered over a colour you choose (use green to key it later).</td></tr>
+    </table>
+    <ul>
+      <li><b>Made for</b> sets the right format for your editor and tells you how to bring it in.</li>
+      <li><b>Frame rate:</b> match your timeline. 23.976, 29.97 and 59.94 are written as exact broadcast rates (24000/1001 and so on), so editors don't flag a mismatch.</li>
+      <li><b>Also make 9:16 and 1:1:</b> tick these to get vertical and square versions in the same export, re-placed for that frame.</li>
+      <li><b>Use GPU and hardware encoding:</b> on a Mac this draws frames on the graphics card and uses Apple's hardware encoder for ProRes and H.264. If the hardware path fails, Thirdline quietly falls back to the regular encoder.</li>
+      <li>Set a default export folder in <b>Settings</b> (<kbd>⌘,</kbd>). Thirdline sends a notification when a long export finishes while you're in another app.</li>
+    </ul>
+
+    <h2 id="editors">Using it in your editor</h2>
+    <h3>Premiere Pro</h3>
+    <p>Import the <code>.mov</code> and drag it onto a video track above your footage (V2). Transparency works automatically. For a template editors can retype, see <a href="#mogrt">.mogrt</a>.</p>
+    <h3>DaVinci Resolve</h3>
+    <p>Import the <code>.mov</code> into the Media Pool and place it on a track above your footage. If the background shows black, right-click the clip, choose <i>Clip Attributes</i> and set <i>Alpha mode</i> to <i>Straight</i>.</p>
+    <h3>Final Cut Pro</h3>
+    <p>Import the <code>.mov</code> and connect it above your footage in the timeline.</p>
+    <h3>OBS and vMix</h3>
+    <p>Export WebM and add it as a Media Source, or use <a href="#live">Live output</a> to trigger lower thirds during a stream.</p>
+
+    <h2 id="projects">Projects, styles and brands</h2>
+    <ul>
+      <li><b>Projects</b> (<code>.l3rd</code>) save everything, including uploaded fonts and images, so a project opens the same on another computer. Fonts installed on your system can't be packed into the file; if one is missing when you open a project, Thirdline tells you which.</li>
+      <li><b>Autosave:</b> your current design is saved as you work. If Thirdline closes unexpectedly it comes back where you left off.</li>
+      <li><b>My styles:</b> <i>File › Save design as a style</i> keeps a look you can reuse. Saved styles show under <i>My styles</i> in the gallery.</li>
+      <li><b>Brand kits:</b> <i>Brand ▾</i> saves your colours, fonts and logo. While a brand is on, every style in the gallery uses it. Use <i>Export brand kit</i> to share it with a teammate or move it to a new Mac, and <i>Import brand kits</i> on the other side.</li>
+    </ul>
+
+    <h2 id="advanced">Advanced mode</h2>
+    <p>Switch with the <b>Easy / Advanced</b> buttons at the top. Advanced mode adds layers, keyframes, a graph editor and the full timeline, and works much like After Effects.</p>
+    <ul>
+      <li><b>Left panel:</b> Layers, Animation presets, Styles and Assets tabs.</li>
+      <li><b>Tool rail</b> in the preview: Select (<kbd>V</kbd>), Pen (<kbd>P</kbd>), Mask pen (<kbd>⇧P</kbd>), shapes, text, image, controller, Hand (<kbd>H</kbd>).</li>
+      <li><b>Inspector</b> on the right has Style, Motion and Position tabs for the selected layer. Click a colour's <b>▦</b> button for swatches and recent colours.</li>
+      <li><b>Selection bar</b> above the preview: align buttons and Parent.</li>
+    </ul>
+
+    <h2 id="timeline">Timeline and keyframes</h2>
+    <ul>
+      <li>Click the ◇ next to a property to add a keyframe at the playhead. Keyframes show on the timeline under their layer.</li>
+      <li>Drag keyframes to retime them. Shift-click or drag a box to select several. <kbd>J</kbd> / <kbd>K</kbd> jump between keyframes.</li>
+      <li>Right-click a keyframe to change its easing. Double-click it (or press <b>Graph…</b>) for the graph editor.</li>
+      <li>The ◆ pairs on each layer bar are its preset In and Out animations. Click one to change it, drag to retime, or <b>Convert to keyframes</b> to edit it key by key.</li>
+      <li>Timeline switches: <b>MB</b> turns motion blur on or off per layer, <b>Matte</b> uses the layer above as a track matte, and the colour chip is the layer's label.</li>
+      <li><kbd>Alt</kbd> + scroll zooms the timeline, <kbd>Shift</kbd> + scroll pans, double-click the ruler to fit.</li>
+    </ul>
+
+    <h2 id="layers">Layers, masks and the pen</h2>
+    <ul>
+      <li><b>+ Add</b> in the Layers tab adds text, a logo or image, accent bars, lines, shapes, a controller (an invisible null to parent to) or a group.</li>
+      <li><b>Parenting:</b> set a layer's Parent and it follows that layer's position, rotation and scale.</li>
+      <li><b>Groups:</b> <kbd>⌘G</kbd> groups the selected layers; <kbd>⇧⌘G</kbd> ungroups.</li>
+      <li><b>Pen:</b> click to add points, drag for curves, click the first point (or press <kbd>Enter</kbd>) to finish. Trim paths animate a stroke drawing on.</li>
+      <li><b>Masks:</b> rectangle, ellipse or pen masks per layer with feather and invert, or the quick wipe, rise and iris presets.</li>
+      <li><b>Text animators:</b> After Effects-style range selectors that animate letters or words.</li>
+    </ul>
+
+    <h2 id="batch">Batch export from a spreadsheet</h2>
+    <ol>
+      <li>Make a spreadsheet with a column for names and one for titles (one row per person). Save it as CSV (in Google Sheets: <i>File › Download › CSV</i>).</li>
+      <li>In Thirdline choose <i>File › Batch export from a spreadsheet</i>, pick the CSV and match the columns to your text layers.</li>
+      <li>Pick a format and a folder. Thirdline renders one file per row, named after the row.</li>
+    </ol>
+
+    <h2 id="live">Live output for OBS</h2>
+    <ol>
+      <li>Click <b>Go live</b> (or <i>File › Live output for OBS</i>) and turn it on.</li>
+      <li>In OBS add a <b>Browser</b> source with the URL shown (<code>http://127.0.0.1:7461/live</code>) and your canvas size.</li>
+      <li>Use the <b>In</b> and <b>Out</b> buttons, or a Stream Deck / Bitfocus Companion sending HTTP GET requests to <code>/cue/in</code>, <code>/cue/out</code> or <code>/cue/toggle</code>.</li>
+    </ol>
+    <p>Changes you make in Thirdline show up live. The output is only reachable from this computer.</p>
+
+    <h2 id="mogrt">.mogrt for Premiere</h2>
+    <p>A <code>.mogrt</code> is a template Premiere editors can retype in the Essential Graphics panel. Only After Effects can create one, so <i>File › Export as .mogrt</i> opens After Effects (2018 or newer; 2024+ recommended), rebuilds your design there and saves the <code>.aep</code> and <code>.mogrt</code>.</p>
+    <ul>
+      <li>Save your work in After Effects first: Thirdline starts a new project.</li>
+      <li>Text, colours and logos become Essential Graphics controls. The backdrop keeps wrapping the text when an editor retypes it.</li>
+      <li>Textures, animated gradients and pen shapes are not carried over. Shadows, glows and blur are close approximations.</li>
+    </ul>
+
+    <h2 id="fonts">Fonts</h2>
+    <ul>
+      <li>12 fonts are built in (Inter, Montserrat, Poppins, Oswald, Anton, Bebas Neue, Playfair Display and more).</li>
+      <li>Every font installed on your Mac is listed under <i>On this computer</i>.</li>
+      <li>Uploaded fonts are remembered and travel inside project files. Installed system fonts don't: install them on the other computer too.</li>
+    </ul>
+
+    <h2 id="trouble">Troubleshooting</h2>
+    <table>
+      <tr><th>Problem</th><th>What to do</th></tr>
+      <tr><td>The background is black in my editor</td><td>Export ProRes 4444, WebM or PNG (MP4 has no transparency). In Resolve, set the clip's Alpha mode to Straight.</td></tr>
+      <tr><td>"Missing fonts" when opening a project</td><td>Install the named fonts, or pick another font. A fallback font is used until then.</td></tr>
+      <tr><td>Export failed with a hardware encoder</td><td>Untick <i>Use GPU and hardware encoding</i> and export again. Report it so we can fix it.</td></tr>
+      <tr><td>.mogrt export doesn't start</td><td>In the .mogrt dialog click <i>change…</i> and pick your After Effects. Close any After Effects dialogs that are open.</td></tr>
+      <tr><td>The preview is slow</td><td>Turn off motion blur preview, or lower the preview zoom.</td></tr>
+      <tr><td>Something else</td><td><i>Help › Report a problem</i> copies the details we need (versions, no project content).</td></tr>
+    </table>
+
+    <h2 id="keys">Keyboard shortcuts</h2>
+    <table>
+      <tr><th>Keys</th><th>Action</th></tr>
+      <tr><td><kbd>⌘N</kbd> <kbd>⌘O</kbd> <kbd>⌘S</kbd> <kbd>⇧⌘S</kbd></td><td>New, open, save, save as</td></tr>
+      <tr><td><kbd>⌘E</kbd></td><td>Export</td></tr>
+      <tr><td><kbd>⌘Z</kbd> / <kbd>⇧⌘Z</kbd></td><td>Undo / redo</td></tr>
+      <tr><td><kbd>⌘C</kbd> <kbd>⌘V</kbd> <kbd>⌘D</kbd></td><td>Copy, paste, duplicate layers or keyframes</td></tr>
+      <tr><td><kbd>⌘G</kbd> / <kbd>⇧⌘G</kbd></td><td>Group / ungroup</td></tr>
+      <tr><td><kbd>Space</kbd></td><td>Play / pause (hold and drag to pan the preview)</td></tr>
+      <tr><td><kbd>←</kbd> <kbd>→</kbd> <kbd>Home</kbd></td><td>Previous frame, next frame, go to start</td></tr>
+      <tr><td><kbd>J</kbd> / <kbd>K</kbd></td><td>Previous / next keyframe</td></tr>
+      <tr><td><kbd>V</kbd> <kbd>P</kbd> <kbd>⇧P</kbd> <kbd>H</kbd></td><td>Select, pen, mask pen, hand</td></tr>
+      <tr><td><kbd>`</kbd></td><td>Clean preview</td></tr>
+      <tr><td><kbd>Tab</kbd> / <kbd>Esc</kbd></td><td>Next layer / deselect</td></tr>
+      <tr><td><kbd>⌘,</kbd> <kbd>⌘/</kbd> <kbd>F1</kbd></td><td>Settings, shortcuts, this guide</td></tr>
+    </table>
+  </main>
+</div>
+</body>
+</html>

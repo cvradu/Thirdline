@@ -19,10 +19,14 @@ const { chromium } = require('playwright');
     const mk = () => { const c = document.createElement('canvas'); c.width = W; c.height = H; return c.getContext('2d', { willReadFrequently: true }); };
     const engCtx = mk(), simCtx = mk(), mctx = mk();
 
-    // Shadows, glows, gradients and textures are AE effects we can't draw here; compare geometry.
+    // Shadows, glows, gradients, textures, outlines and torn edges are AE effects/strokes this
+    // simulator doesn't draw (mogrt-jsx-test checks they're emitted); compare geometry.
     const plain = (s) => {
       s = JSON.parse(JSON.stringify(s));
       s.backdrop.shadow.on = false; s.backdrop.fillType = 'solid'; s.backdrop.gradient = false; s.backdrop.texture.enabled = false;
+      if (s.backdrop.stroke) s.backdrop.stroke.on = false;
+      s.backdrop.fillOn = true;
+      if (s.backdrop.torn) s.backdrop.torn.on = false;
       for (const k of ['title', 'subtitle']) { s[k].shadow.on = false; s[k].glow.on = false; s[k].stroke.on = false; }
       for (const ly of Object.values(s.layers || {})) { if (ly.shadow) ly.shadow.on = false; if (ly.glow) ly.glow.on = false; if (ly.stroke) ly.stroke.on = false; }
       return s;

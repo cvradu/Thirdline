@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'" />
+  <title>Third-party licences · Thirdline</title>
+  <link rel="stylesheet" href="help.css" />
+</head>
+<body>
+<div class="wrap">
+  <nav>
+    <div class="brand"><span>▁▃</span> Thirdline</div>
+    <a href="guide.html">← User guide</a>
+    <a href="#ffmpeg">FFmpeg</a>
+    <a href="#fonts">Fonts</a>
+    <a href="#electron">Electron and Chromium</a>
+  </nav>
+  <main>
+    <h1>Third-party licences</h1>
+    <p class="lead">Thirdline is built with the open-source software below. Thank you to everyone who works on it.</p>
+
+    <h2 id="ffmpeg">FFmpeg</h2>
+    <p>Thirdline uses <a href="https://ffmpeg.org">FFmpeg</a> to encode video. FFmpeg is a trademark of Fabrice Bellard. The FFmpeg program is shipped as a separate executable inside the app and is not modified.</p>
+    <p>FFmpeg is licensed under the <a href="https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html">GNU Lesser General Public License 2.1</a> or later; builds that include optional GPL components are licensed under the <a href="https://www.gnu.org/licenses/gpl-3.0.html">GNU General Public License 3.0</a>. The licence of the copy in this app is shown by running it with <code>-L</code>. Its source code is available from <a href="https://ffmpeg.org/download.html">ffmpeg.org</a>; the build configuration Thirdline uses is in the app's build scripts, and a copy of the exact source is available on request.</p>
+    <p>The VP9 encoder (libvpx) is licensed under the BSD 3-clause licence. © The WebM Project authors.</p>
+
+    <h2 id="fonts">Fonts</h2>
+    <p>The bundled typefaces are licensed under the <a href="https://openfontlicense.org">SIL Open Font License 1.1</a>, obtained from Google Fonts via Fontsource:</p>
+    <table>
+      <tr><th>Typeface</th><th>Designer</th></tr>
+      <tr><td>Inter</td><td>Rasmus Andersson</td></tr>
+      <tr><td>Montserrat</td><td>Julieta Ulanovsky and contributors</td></tr>
+      <tr><td>Poppins</td><td>Indian Type Foundry</td></tr>
+      <tr><td>Space Grotesk</td><td>Florian Karsten</td></tr>
+      <tr><td>Lato</td><td>Łukasz Dziedzic</td></tr>
+      <tr><td>Roboto Condensed</td><td>Christian Robertson</td></tr>
+      <tr><td>Barlow Condensed</td><td>Jeremy Tribby</td></tr>
+      <tr><td>Oswald</td><td>Vernon Adams and contributors</td></tr>
+      <tr><td>Bebas Neue</td><td>Ryoichi Tsunekawa</td></tr>
+      <tr><td>Anton</td><td>Vernon Adams</td></tr>
+      <tr><td>Playfair Display</td><td>Claus Eggers Sørensen</td></tr>
+      <tr><td>DM Serif Display</td><td>Colophon Foundry</td></tr>
+    </table>
+
+    <h2 id="electron">Electron and Chromium</h2>
+    <p>Thirdline runs on <a href="https://www.electronjs.org">Electron</a> (MIT licence, © Electron contributors and GitHub Inc.), which includes Chromium and Node.js. Their licences, and those of the components they include, are listed at <a href="https://github.com/electron/electron/blob/main/LICENSE">github.com/electron/electron</a> and in Chromium's <code>chrome://credits</code> page.</p>
+  </main>
+</div>
+</body>
+</html>

@@ -17,6 +17,7 @@ DAMAGES OR OTHER LIABILITY ARISING FROM THE USE OF THE SOFTWARE.
 
 Third-party components keep their own licences:
 - Bundled fonts: SIL Open Font License 1.1 (see src/fonts/LICENSE.txt).
-- ffmpeg (bundled via ffmpeg-static): GNU GPL / LGPL, see https://ffmpeg.org/legal.html.
+- ffmpeg: the Mac app bundles an LGPL-only build (scripts/build-ffmpeg-lgpl.sh);
+  development installs use ffmpeg-static (GPL). See https://ffmpeg.org/legal.html.
 - Electron and other open-source dependencies: see their own licence files
   in node_modules.
