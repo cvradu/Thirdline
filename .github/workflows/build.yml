@@ -16,11 +16,24 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      # Apple Silicon build (runner is arm64, so ffmpeg-static fetched the arm64 binary)
-      - run: npx electron-builder --mac dmg --arm64 --publish never
-      # Intel build: swap in the x64 ffmpeg binary first
+      # The Mac app ships an LGPL-only ffmpeg (no libx264); ffmpeg-static's binary is a GPL build.
+      - run: brew install nasm pkg-config
+      - uses: actions/cache@v4
+        id: ffcache
+        with:
+          path: ffmpeg-lgpl
+          key: ffmpeg-lgpl-${{ hashFiles('scripts/build-ffmpeg-lgpl.sh') }}
+      - if: steps.ffcache.outputs.cache-hit != 'true'
+        run: |
+          scripts/build-ffmpeg-lgpl.sh arm64 "$PWD/ffmpeg-lgpl/arm64/ffmpeg"
+          scripts/build-ffmpeg-lgpl.sh x86_64 "$PWD/ffmpeg-lgpl/x64/ffmpeg"
+      # Apple Silicon build
       - run: |
-          cd node_modules/ffmpeg-static && rm -f ffmpeg && npm_config_arch=x64 node install.js && file ffmpeg
+          cp ffmpeg-lgpl/arm64/ffmpeg node_modules/ffmpeg-static/ffmpeg && file node_modules/ffmpeg-static/ffmpeg
+          node_modules/ffmpeg-static/ffmpeg -hide_banner -L | grep -q "Lesser General Public"
+      - run: npx electron-builder --mac dmg --arm64 --publish never
+      # Intel build: swap in the x64 binary
+      - run: cp ffmpeg-lgpl/x64/ffmpeg node_modules/ffmpeg-static/ffmpeg && file node_modules/ffmpeg-static/ffmpeg
       - run: npx electron-builder --mac dmg --x64 --publish never
       - run: |
           ls -la dist

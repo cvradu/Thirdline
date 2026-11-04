@@ -1,0 +1,37 @@
+name: LGPL ffmpeg
+# Builds the LGPL-only ffmpeg the Mac app ships with and checks it can make every export format.
+on:
+  pull_request:
+    paths: ['scripts/build-ffmpeg-lgpl.sh', '.github/workflows/ffmpeg-lgpl.yml', 'main.js']
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install nasm pkg-config
+      - uses: actions/cache@v4
+        id: cache
+        with:
+          path: ffmpeg-lgpl
+          key: ffmpeg-lgpl-${{ hashFiles('scripts/build-ffmpeg-lgpl.sh') }}
+      - if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          scripts/build-ffmpeg-lgpl.sh arm64 "$PWD/ffmpeg-lgpl/arm64/ffmpeg"
+          scripts/build-ffmpeg-lgpl.sh x86_64 "$PWD/ffmpeg-lgpl/x64/ffmpeg"
+      - name: Every Thirdline export format
+        run: |
+          F=ffmpeg-lgpl/arm64/ffmpeg
+          file ffmpeg-lgpl/*/ffmpeg
+          $F -hide_banner -L | head -3
+          IN="-f lavfi -i color=c=red@0.5:s=320x180:r=30000/1001:d=1,format=rgba"
+          $F -v error -y $IN -c:v prores_ks -profile:v 4444 -pix_fmt yuva444p10le -alpha_bits 16 out.mov
+          $F -v error -y $IN -c:v libvpx-vp9 -pix_fmt yuva420p -b:v 0 -crf 30 out.webm
+          $F -v error -y $IN -c:v png -pix_fmt rgba out_%03d.png
+          $F -v error -y $IN -c:v h264_videotoolbox -allow_sw 1 -b:v 4M -pix_fmt yuv420p out.mp4
+          $F -v error -y $IN -c:v prores_videotoolbox -profile:v 4444 -pix_fmt bgra out-hw.mov || echo "prores_videotoolbox not available on this runner (fine: the app falls back to prores_ks)"
+          ls -la out.* out_001.png
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-lgpl-macos
+          path: ffmpeg-lgpl

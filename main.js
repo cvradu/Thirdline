@@ -209,7 +209,8 @@ const HW = {
     ['-c:v', 'prores_videotoolbox', '-profile:v', '4444', '-pix_fmt', 'bgra'],
     ['-c:v', 'prores_videotoolbox', '-profile:v', '4444', '-pix_fmt', 'ayuv64le'],
   ],
-  mp4: [['-c:v', 'h264_videotoolbox', '-b:v', '24M', '-pix_fmt', 'yuv420p', '-movflags', '+faststart']],
+  // The second form lets VideoToolbox use Apple's software H.264 encoder when there's no hardware one.
+  mp4: [['-c:v', 'h264_videotoolbox', '-b:v', '24M', '-pix_fmt', 'yuv420p', '-movflags', '+faststart'], ['-c:v', 'h264_videotoolbox', '-allow_sw', '1', '-b:v', '24M', '-pix_fmt', 'yuv420p', '-movflags', '+faststart']],
 };
 // NTSC rates must be exact fractions (30000/1001), or editors see 29.97 as 2997/100 and flag a mismatch.
 function rateArg(fps) {
