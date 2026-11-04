@@ -4,7 +4,7 @@ const { chromium } = require('playwright');
   const p = await b.newPage({ viewport: { width: 1500, height: 940 } });
   const errs = [];
   p.on('pageerror', (e) => errs.push(e.message));
-  await p.goto('file:///home/claude/l3rd-creator/src/index.html');
+  await p.goto('file://' + require('path').resolve(__dirname, '../src/index.html'));
   await p.waitForTimeout(1200);
   const box = await p.locator('#scrub').boundingBox();
   await p.mouse.click(box.x + box.width * 0.5, box.y + box.height / 2);

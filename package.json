@@ -27,6 +27,8 @@
       "main.js",
       "live-server.js",
       "preload.js",
+      "app-config.json",
+      "license.js",
       "src/**/*",
       "package.json"
     ],

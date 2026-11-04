@@ -4,6 +4,10 @@ const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
 const { createLiveServer } = require('./live-server');
+const { createLicensing } = require('./license');
+
+// Shipping settings (licensing switch, update feed, support contact). See app-config.json.
+const CONFIG = (() => { try { return JSON.parse(fs.readFileSync(path.join(__dirname, 'app-config.json'), 'utf8')); } catch { return {}; } })();
 
 function ffmpegPath() {
   if (process.env.L3RD_FFMPEG) return process.env.L3RD_FFMPEG;
@@ -15,6 +19,7 @@ function ffmpegPath() {
 const userDir = () => app.getPath('userData');
 const presetsFile = () => path.join(userDir(), 'presets.json');
 const fontsDir = () => path.join(userDir(), 'fonts');
+const licensing = createLicensing({ userDir, config: CONFIG.licensing });
 
 let win;
 function createWindow() {
@@ -44,10 +49,12 @@ function createWindow() {
   // The page blocks unload when there are unsaved changes; ask before discarding them.
   win.webContents.on('will-prevent-unload', (e) => {
     const choice = dialog.showMessageBoxSync(win, {
-      type: 'warning', buttons: ['Discard changes', 'Cancel'], defaultId: 1, cancelId: 1,
-      message: 'You have unsaved changes.', detail: 'Close without saving your project?',
+      type: 'warning', buttons: ['Save', 'Don’t Save', 'Cancel'], defaultId: 0, cancelId: 2,
+      message: 'Do you want to save the changes to this project?', detail: 'Your changes will be lost if you don’t save them.',
     });
-    if (choice === 0) e.preventDefault();
+    if (choice === 1) e.preventDefault();
+    // Save: the page saves, then closes the window itself (or stays open if the save is cancelled).
+    else if (choice === 0) win.webContents.send('menu', 'saveAndClose');
   });
   if (process.env.L3RD_DEVTOOLS) win.webContents.openDevTools({ mode: 'detach' });
 }
@@ -69,7 +76,15 @@ function buildMenu() {
   const send = (cmd) => () => win && win.webContents.send('menu', cmd);
   const isMac = process.platform === 'darwin';
   const template = [
-    ...(isMac ? [{ role: 'appMenu' }] : []),
+    ...(isMac ? [{ label: app.name, submenu: [
+      { label: `About ${app.name}`, click: send('about') },
+      { label: 'Check for Updates…', click: send('updates') },
+      { label: 'Licence…', click: send('license') },
+      { type: 'separator' },
+      { label: 'Settings…', accelerator: 'Cmd+,', click: send('prefs') },
+      { type: 'separator' }, { role: 'services' }, { type: 'separator' },
+      { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit' },
+    ] }] : []),
     { label: 'File', submenu: [
       { label: 'New Project', accelerator: 'CmdOrCtrl+N', click: send('new') },
       { label: 'Open…', accelerator: 'CmdOrCtrl+O', click: send('open') },
@@ -93,6 +108,15 @@ function buildMenu() {
     ] },
     { label: 'View', submenu: [{ label: 'Reset Panel Layout', click: send('resetLayout') }, { type: 'separator' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { type: 'separator' }, { role: 'togglefullscreen' }, { role: 'toggleDevTools' }] },
     { role: 'windowMenu' },
+    { role: 'help', submenu: [
+      { label: 'Start Screen', click: send('start') },
+      { label: 'Thirdline User Guide', accelerator: 'F1', click: () => openGuide() },
+      { label: 'Keyboard Shortcuts', accelerator: 'CmdOrCtrl+/', click: send('shortcuts') },
+      { type: 'separator' },
+      { label: 'Report a Problem…', click: send('report') },
+      { label: 'Third-Party Licences', click: () => openGuide('licenses.html') },
+      ...(isMac ? [] : [{ type: 'separator' }, { label: 'Settings…', accelerator: 'Ctrl+,', click: send('prefs') }, { label: 'Licence…', click: send('license') }, { label: 'About Thirdline', click: send('about') }]),
+    ] },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
@@ -187,8 +211,14 @@ const HW = {
   ],
   mp4: [['-c:v', 'h264_videotoolbox', '-b:v', '24M', '-pix_fmt', 'yuv420p', '-movflags', '+faststart']],
 };
+// NTSC rates must be exact fractions (30000/1001), or editors see 29.97 as 2997/100 and flag a mismatch.
+function rateArg(fps) {
+  const n = Number(fps);
+  for (const base of [24, 30, 48, 60, 120]) if (Math.abs(n - base * 1000 / 1001) < 0.01) return `${base * 1000}/1001`;
+  return String(n);
+}
 function ffmpegArgs(format, w, h, fps, out, hw) {
-  const input = ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'rawvideo', '-pix_fmt', 'rgba', '-s', `${w}x${h}`, '-framerate', String(fps), '-i', 'pipe:0'];
+  const input = ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'rawvideo', '-pix_fmt', 'rgba', '-s', `${w}x${h}`, '-framerate', rateArg(fps), '-i', 'pipe:0'];
   const bt709 = ['-color_primaries', 'bt709', '-color_trc', 'bt709', '-colorspace', 'bt709'];
   const yuvScale = ['-vf', 'scale=out_color_matrix=bt709:out_range=tv'];
   if (hw) return [...input, ...hw, ...bt709, out];
@@ -206,15 +236,17 @@ function ffmpegArgs(format, w, h, fps, out, hw) {
   }
 }
 
-ipcMain.handle('export:chooseDest', async (_e, format, baseName) => {
+ipcMain.handle('export:chooseDest', async (_e, format, baseName, dir) => {
   const f = FORMATS[format];
   if (!f) throw new Error('Unknown format');
+  const inDir = dir && fs.existsSync(dir) ? dir : null;
   if (!f.ext) {
-    const r = await dialog.showOpenDialog(win, { title: 'Choose a folder for the PNG sequence', properties: ['openDirectory', 'createDirectory'] });
+    const r = await dialog.showOpenDialog(win, { title: 'Choose a folder for the PNG sequence', defaultPath: inDir || undefined, properties: ['openDirectory', 'createDirectory'] });
     if (r.canceled || !r.filePaths[0]) return null;
     return path.join(r.filePaths[0], baseName || 'lower-third');
   }
-  const r = await dialog.showSaveDialog(win, { defaultPath: `${baseName || 'lower-third'}.${f.ext}`, filters: [{ name: f.label, extensions: [f.ext] }] });
+  const name = `${baseName || 'lower-third'}.${f.ext}`;
+  const r = await dialog.showSaveDialog(win, { defaultPath: inDir ? path.join(inDir, name) : name, filters: [{ name: f.label, extensions: [f.ext] }] });
   return r.canceled ? null : r.filePath;
 });
 
@@ -255,13 +287,30 @@ async function probeHw(format) {
   try { fs.rmSync(tmp, { force: true }); } catch {}
   return hwCache[format];
 }
+// Which encoders this ffmpeg has. The LGPL build has no libx264, so MP4 goes through Apple's
+// hardware H.264 encoder (or OpenH264 on other systems) instead.
+let encoderSet = null;
+async function encoders() {
+  if (encoderSet) return encoderSet;
+  const out = await run(['-hide_banner', '-encoders']);
+  encoderSet = new Set(String(out || '').split('\n').map((l) => (/^\s*V\S*\s+(\S+)/.exec(l) || [])[1]).filter(Boolean));
+  return encoderSet;
+}
+const OPENH264 = ['-c:v', 'libopenh264', '-b:v', '24M', '-pix_fmt', 'yuv420p', '-movflags', '+faststart'];
 const ENCODER_NAME = { prores: 'ProRes (software)', webm: 'VP9 (software)', mp4: 'H.264 (software)', png: 'PNG' };
 async function startJob({ format, out, width, height, fps, hw }) {
   if (format === 'png') fs.mkdirSync(out, { recursive: true });
-  const hwArgs = hw ? await probeHw(format) : null;
+  let hwArgs = hw ? await probeHw(format) : null;
+  if (format === 'mp4' && !hwArgs) {
+    const enc = await encoders();
+    if (enc.size && !enc.has('libx264')) {
+      hwArgs = (await probeHw('mp4')) || (enc.has('libopenh264') ? OPENH264 : null);
+      if (!hwArgs) throw new Error('This copy of Thirdline has no H.264 encoder. Export as ProRes or WebM instead.');
+    }
+  }
   const args = ffmpegArgs(format, width, height, fps, out, hwArgs);
   const proc = spawn(ffmpegPath(), args, { stdio: ['pipe', 'ignore', 'pipe'] });
-  const job = { proc, log: '', out, format, done: null, error: null, encoder: hwArgs ? `${hwArgs[1].replace('_videotoolbox', '').replace('prores', 'ProRes').replace('h264', 'H.264')} (Apple hardware)` : ENCODER_NAME[format] };
+  const job = { proc, log: '', out, format, done: null, error: null, encoder: hwArgs === OPENH264 ? 'H.264 (OpenH264)' : hwArgs ? `${hwArgs[1].replace('_videotoolbox', '').replace('prores', 'ProRes').replace('h264', 'H.264')} (Apple hardware)` : ENCODER_NAME[format] };
   proc.stderr.on('data', (d) => { job.log += d.toString(); });
   proc.stdin.on('error', (err) => { job.error = err; });
   job.done = new Promise((resolve) => {
@@ -345,6 +394,68 @@ ipcMain.handle('fonts:read', (_e, file) => {
 ipcMain.handle('shell:reveal', (_e, p) => shell.showItemInFolder(p));
 ipcMain.handle('app:info', () => ({ version: app.getVersion(), ffmpeg: ffmpegPath(), platform: process.platform }));
 
+// Everything a bug report needs, without the user's files or names.
+let ffmpegVersion = null;
+ipcMain.handle('app:diagnostics', async () => {
+  if (ffmpegVersion == null) {
+    ffmpegVersion = await new Promise((resolve) => {
+      let out = '';
+      try {
+        const p = spawn(ffmpegPath(), ['-hide_banner', '-version'], { stdio: ['ignore', 'pipe', 'ignore'] });
+        p.stdout.on('data', (d) => { out += d; });
+        p.on('error', () => resolve('not found'));
+        p.on('close', () => resolve((out.split('\n')[0] || 'unknown').replace(/^ffmpeg version /, '').split(' ')[0]));
+      } catch { resolve('not found'); }
+    });
+  }
+  const os = require('os');
+  return {
+    app: app.getVersion(), electron: process.versions.electron, chrome: process.versions.chrome,
+    os: `${process.platform} ${os.release()} (${process.arch})`, ffmpeg: ffmpegVersion,
+    encoders: Object.keys(hwCache).filter((k) => hwCache[k]).join(', ') || 'not probed yet',
+    plan: licensing.status().plan, locale: app.getLocale(),
+  };
+});
+ipcMain.handle('app:config', () => ({ supportEmail: (CONFIG.support && CONFIG.support.email) || '', supportUrl: (CONFIG.support && CONFIG.support.url) || '', updateRepo: UPDATE_REPO }));
+ipcMain.handle('app:close', () => { if (win) { win.webContents.removeAllListeners('will-prevent-unload'); win.close(); } });
+
+// ---------- Licence ----------
+ipcMain.handle('license:status', () => licensing.status());
+ipcMain.handle('license:refresh', () => licensing.refresh());
+ipcMain.handle('license:activate', (_e, key) => licensing.activate(key));
+ipcMain.handle('license:deactivate', () => licensing.deactivate());
+
+// ---------- Small JSON files (brand kits) ----------
+ipcMain.handle('files:saveText', async (_e, { title, name, ext, text }) => {
+  const r = await dialog.showSaveDialog(win, { title, defaultPath: `${name}.${ext}`, filters: [{ name: title, extensions: [ext] }] });
+  if (r.canceled || !r.filePath) return null;
+  fs.writeFileSync(r.filePath, text);
+  return r.filePath;
+});
+ipcMain.handle('files:openText', async (_e, { title, exts }) => {
+  const r = await dialog.showOpenDialog(win, { title, properties: ['openFile'], filters: [{ name: title, extensions: exts }] });
+  if (r.canceled || !r.filePaths[0]) return null;
+  return { path: r.filePaths[0], text: fs.readFileSync(r.filePaths[0], 'utf8') };
+});
+ipcMain.handle('export:chooseFolderDefault', async () => {
+  const r = await dialog.showOpenDialog(win, { title: 'Default export folder', properties: ['openDirectory', 'createDirectory'] });
+  return r.canceled ? null : r.filePaths[0] || null;
+});
+
+// ---------- User guide (a separate window, works offline) ----------
+let guideWin = null;
+function openGuide(page = 'guide.html') {
+  const file = path.join(__dirname, 'src', 'help', page);
+  if (guideWin && !guideWin.isDestroyed()) { guideWin.loadFile(file); guideWin.show(); guideWin.focus(); return; }
+  guideWin = new BrowserWindow({ width: 900, height: 820, title: 'Thirdline User Guide', backgroundColor: '#0b0d12', parent: undefined, webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  guideWin.setMenuBarVisibility(false);
+  // Links out of the guide open in the browser, never inside the app.
+  guideWin.webContents.setWindowOpenHandler(({ url }) => { if (/^https:/.test(url)) shell.openExternal(url); return { action: 'deny' }; });
+  guideWin.webContents.on('will-navigate', (e, url) => { if (!url.startsWith('file:')) { e.preventDefault(); if (/^https:/.test(url)) shell.openExternal(url); } });
+  guideWin.loadFile(file);
+}
+ipcMain.handle('help:guide', (_e, page) => openGuide(['guide.html', 'licenses.html'].includes(page) ? page : 'guide.html'));
+
 module.exports = { ffmpegArgs, HW };
 
 // ---------- Live output (OBS browser source) ----------
@@ -354,7 +465,7 @@ const live = createLiveServer({
   onCue: (action) => win && win.webContents.send('live:cued', action),
 });
 const userFontList = () => { try { return fs.readdirSync(fontsDir()).filter((f) => /\.(ttf|otf|woff2?)$/i.test(f)).map((file) => ({ file, family: fontEntry(file).family })); } catch { return []; } };
-ipcMain.handle('live:start', async (_e, opts = {}) => live.start(opts.port || 7461));
+ipcMain.handle('live:start', async (_e, opts = {}) => (licensing.can('live') ? live.start(opts.port || 7461) : { error: 'plan' }));
 ipcMain.handle('live:stop', () => { live.stop(); return true; });
 ipcMain.handle('live:update', (_e, state) => { live.update(state, userFontList()); return live.clients; });
 ipcMain.handle('live:cue', (_e, action) => { live.cue(action); return live.clients; });
@@ -364,7 +475,10 @@ app.on('before-quit', () => live.stop());
 // ---------- Update check (GitHub releases) ----------
 // The app is not signed with an Apple Developer ID, so it can't replace itself; instead it
 // tells you a new version exists and opens the right download.
-const RELEASES = 'https://api.github.com/repos/cvradu/Thirdline/releases/latest';
+// The repo comes from app-config.json, so releases can move to a public releases-only repo
+// while the source stays private.
+const UPDATE_REPO = (CONFIG.updates && CONFIG.updates.repo) || 'cvradu/Thirdline';
+const RELEASES = `https://api.github.com/repos/${UPDATE_REPO}/releases/latest`;
 const newer = (a, b) => { const pa = a.split('.').map(Number), pb = b.split('.').map(Number); for (let i = 0; i < 3; i++) { if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) > (pb[i] || 0); } return false; };
 ipcMain.handle('update:check', async () => {
   try {
@@ -378,7 +492,15 @@ ipcMain.handle('update:check', async () => {
     return { current: app.getVersion(), latest, available: !!latest && newer(latest, app.getVersion()), url: asset ? asset.browser_download_url : rel.html_url, page: rel.html_url, notes: rel.body || '' };
   } catch (e) { return { error: String(e.message || e) }; }
 });
-ipcMain.handle('shell:openExternal', (_e, url) => { if (/^https:\/\/github\.com\/cvradu\/Thirdline\//.test(url)) shell.openExternal(url); });
+// Only links Thirdline itself makes: its release downloads, the store, support.
+function allowedExternal(url) {
+  if (typeof url !== 'string') return false;
+  if (url.startsWith(`https://github.com/${UPDATE_REPO}/`) || /^https:\/\/github\.com\/cvradu\/Thirdline\//.test(url)) return true;
+  const ok = [CONFIG.licensing && CONFIG.licensing.buyUrl, CONFIG.support && CONFIG.support.url].filter(Boolean);
+  if (ok.some((u) => url.startsWith(u))) return true;
+  return /^mailto:/.test(url) && !!(CONFIG.support && CONFIG.support.email) && url.startsWith(`mailto:${CONFIG.support.email}`);
+}
+ipcMain.handle('shell:openExternal', (_e, url) => { if (allowedExternal(url)) shell.openExternal(url); });
 
 // ---------- Export as .mogrt (via After Effects) ----------
 // Thirdline can't write .mogrt files itself (only Adobe's apps can), so it rebuilds the design in
@@ -557,6 +679,7 @@ function runInAfterEffects(ae, jsx) {
   });
 }
 ipcMain.handle('mogrt:export', async (_e, { scene, images, installFonts }) => {
+  if (!licensing.can('mogrt')) return { error: 'Export as .mogrt is part of Thirdline Studio.' };
   const ae = findAfterEffects();
   if (!ae) return { error: 'no-ae' };
   const dir = path.join(userDir(), 'mogrt', String(Date.now()));

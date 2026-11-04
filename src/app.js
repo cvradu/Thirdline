@@ -116,6 +116,27 @@
     }
     return f.family;
   }
+  // Every font family a design draws with: title, subtitle and every extra text layer.
+  function usedFontFamilies(s = state) {
+    return new Set([s.title, s.subtitle, ...Object.values(s.layers || {}).filter((l) => l && l.kind === 'text')].filter(Boolean).map((t) => t.font).filter(Boolean));
+  }
+  // Fonts the design uses that this computer can't draw (not bundled, not imported, not installed).
+  function missingFonts(s = state) {
+    const generic = /^(serif|sans-serif|monospace|cursive|fantasy|system-ui)$/i;
+    return [...usedFontFamilies(s)].filter((f) => !generic.test(f) && !BUILTIN_FONTS[f] && !userFonts.some((u) => u.family === f)
+      && !(localFontsScanned && SYSTEM_FONTS.includes(f)) && !fontRenders(f));
+  }
+  // document.fonts.check() says yes for unknown names, so measure instead: a font that draws the
+  // sample exactly like both fallbacks is not really there.
+  let fontProbe = null;
+  function fontRenders(f) {
+    fontProbe ??= document.createElement('canvas').getContext('2d');
+    const sample = 'mmmmmmmmmlli1WQ@#';
+    return ['monospace', 'serif'].some((fb) => {
+      fontProbe.font = `72px ${fb}`; const a = fontProbe.measureText(sample).width;
+      fontProbe.font = `72px "${f}", ${fb}`; return fontProbe.measureText(sample).width !== a;
+    });
+  }
   async function ensureFonts(s = state) {
     const loads = [s.title, s.subtitle, ...Object.values(s.layers || {}).filter((l) => l.kind === 'text')].filter((t) => t.text).map((t) =>
       document.fonts.load(`${t.italic ? 'italic ' : ''}${t.weight} ${t.size}px "${t.font}"`, t.text + 'Hgjpqy').catch(() => {}));
@@ -401,6 +422,7 @@
   let advanced = false;
   try { advanced = localStorage.getItem('thirdline:advanced') === '1'; } catch {}
   function setAdvanced(on) {
+    if (on && !Shell.require('advanced')) on = false;
     advanced = on; document.body.classList.toggle('advanced', on);
     $('#optAdvanced').checked = on;
     $('#modeEasy').classList.toggle('on', !on); $('#modeAdv').classList.toggle('on', on);
@@ -521,7 +543,16 @@
           for (const c of recentColors) recent.append(el('span', { style: `background:${c}`, title: c, onclick: () => { i.value = c; hex.value = c; set(c); } }));
         });
         recentSwatchSets[recentSwatchSets.length - 1]();
-        const wrap = el('div', { style: 'flex:1' }, el('div', { class: 'ctl' }, i, hex, ...tools), def.swatches === false ? null : sw, def.swatches === false ? null : recent);
+        // Swatches fold into a small popover so each colour takes one line in the inspector.
+        let pop = null;
+        if (def.swatches !== false) {
+          pop = el('div', { class: 'swatch-pop', hidden: true }, sw, recent);
+          pop.addEventListener('click', (e) => { if (e.target.tagName === 'SPAN') pop.hidden = true; });
+          tools.push(el('button', { type: 'button', class: 'eyedrop swatch-btn', title: 'Swatches and recent colours', 'aria-expanded': 'false', onclick: (e) => {
+            pop.hidden = !pop.hidden; e.currentTarget.setAttribute('aria-expanded', String(!pop.hidden));
+          } }, '▦'));
+        }
+        const wrap = el('div', { style: 'flex:1;position:relative' }, el('div', { class: 'ctl' }, i, hex, ...tools), pop);
         ctl.append(wrap);
         sync = () => { i.value = val() || '#000000'; if (document.activeElement !== hex) hex.value = val() || ''; };
         break;
@@ -2076,12 +2107,28 @@
     tg.drawImage(c, x0, y0, w, h, 0, 0, 320, 120);
     return t.toDataURL('image/jpeg', 0.85);
   }
+  // Style gallery filters. A style can sit in more than one category.
+  const STYLE_CATS = [['all', 'All'], ['news', 'News'], ['corporate', 'Corporate'], ['podcast', 'Podcast & creator'], ['sport', 'Sport & gaming'], ['elegant', 'Elegant'], ['bold', 'Bold & fun'], ['mine', 'My styles']];
+  const STYLE_CAT_OF = {
+    'News Accent': ['news', 'corporate'], 'Clean Pill': ['podcast', 'corporate'], 'Sport Slant': ['sport', 'bold'], 'Minimal Underline': ['elegant', 'corporate'],
+    'Two-Tone Broadcast': ['news'], 'Elegant Serif': ['elegant'], 'Glass Rounded': ['corporate', 'podcast'], 'Bold Outline': ['bold', 'podcast'],
+    'Neon Glow': ['bold', 'sport'], 'Torn Paper': ['bold', 'podcast'], 'Gradient Title': ['podcast', 'bold'], 'Corporate Blue': ['corporate', 'news'],
+    'Gold Luxury': ['elegant'], 'Podcast Pill': ['podcast'], 'Breaking News': ['news'], 'Esports': ['sport', 'bold'], 'Documentary': ['elegant', 'news'],
+    'Corner Frame': ['corporate', 'elegant'], 'Soft Card': ['corporate', 'podcast'], 'Retro Sunset': ['bold'], 'Terminal': ['bold', 'sport'],
+    'Comic Pop': ['bold'], 'Dark Glass': ['corporate', 'podcast'], 'Sports Score': ['sport', 'news'], 'Centered Minimal': ['elegant', 'corporate'], 'Gritty Tape': ['bold', 'sport'],
+  };
+  let galleryCat = 'all';
+  try { galleryCat = localStorage.getItem('thirdline:styleCat') || 'all'; } catch {}
   async function refreshGallery() {
     if (advanced) return;
     const g = $('#styleGallery'); if (!g) return;
     await document.fonts.ready;
-    const items = [...Presets.BUILTIN.map((p, i) => ({ name: p.name.replace(' (default)', ''), builtin: i })), ...saved.map((p) => ({ name: p.name, state: p.state, user: true }))];
+    const all = [...Presets.BUILTIN.map((p, i) => ({ name: p.name.replace(' (default)', ''), builtin: i })), ...saved.map((p) => ({ name: p.name, state: p.state, user: true }))];
+    const cat = STYLE_CATS.some((c) => c[0] === galleryCat) && (galleryCat !== 'mine' || saved.length) ? galleryCat : 'all';
+    const items = all.filter((it) => cat === 'all' || (cat === 'mine' ? it.user : (STYLE_CAT_OF[it.name] || []).includes(cat)));
     g.innerHTML = '';
+    g.append(el('div', { class: 'style-cats', role: 'tablist' }, ...STYLE_CATS.filter(([k]) => k !== 'mine' || saved.length).map(([k, label]) =>
+      el('button', { type: 'button', role: 'tab', class: k === cat ? 'on' : '', 'aria-selected': k === cat ? 'true' : 'false', onclick: () => { galleryCat = k; try { localStorage.setItem('thirdline:styleCat', k); } catch {} refreshGallery(); } }, label))));
     for (const it of items) {
       const st = styleState(it);
       await ensureFonts(st);
@@ -2170,6 +2217,55 @@
     m.append(el('hr'));
     m.append(el('button', { type: 'button', onclick: () => { m.hidden = true; saveBrand(); } }, cur ? `Update “${cur.name}” from this design…` : 'Save this design’s colours, fonts and logo as a brand…'));
     if (cur) m.append(el('button', { type: 'button', onclick: () => { m.hidden = true; delete state.ui.brand; changed(); renderBrandMenu(); queueGallery(); } }, 'Stop using the brand (keeps the current look)'));
+    m.append(el('hr'));
+    m.append(el('button', { type: 'button', onclick: () => { m.hidden = true; importBrands(); } }, 'Import brand kits…'));
+    if (brands.length) m.append(el('button', { type: 'button', onclick: () => { m.hidden = true; exportBrands(); } }, brands.length > 1 ? `Export all ${brands.length} brand kits…` : 'Export brand kit…'));
+  }
+  // Brand kits live on this computer; a .thirdline-brand file carries them (fonts and logo included)
+  // to a teammate or a new Mac.
+  async function exportBrands() {
+    // Font bytes don't survive localStorage, so read them from the loaded fonts or the fonts folder.
+    const bytes = async (f) => {
+      let d = (userFonts.find((u) => u.family === f.family) || {}).data;
+      if (!(d && (d.byteLength || (d.buffer && d.buffer.byteLength))) && api.fonts.read) d = await api.fonts.read(f.file);
+      if (!d || !(d.byteLength || (d.buffer && d.buffer.byteLength))) return null;
+      return toB64(d.buffer ? new Uint8Array(d.buffer, d.byteOffset || 0, d.byteLength) : d);
+    };
+    const list = [];
+    for (const b of brands) {
+      const fonts = [];
+      for (const f of b.fonts || []) { const data = await bytes(f); if (data) fonts.push({ family: f.family, file: f.file, data }); }
+      list.push({ ...b, fonts });
+    }
+    const text = JSON.stringify({ format: 'thirdline-brand', version: 1, brands: list });
+    const name = brands.length === 1 ? brands[0].name : 'Brand kits';
+    if (api.files) { const p = await api.files.saveText({ title: 'Thirdline brand kit', name, ext: 'thirdline-brand', text }); if (p) toast('Brand kits exported'); }
+    else download(`${name}.thirdline-brand`, new Blob([text], { type: 'application/json' }));
+  }
+  async function importBrands() {
+    let text = null;
+    if (api.files) { const r = await api.files.openText({ title: 'Thirdline brand kit', exts: ['thirdline-brand', 'json'] }); text = r && r.text; }
+    else { const f = await pickFile('.thirdline-brand,.json'); text = f ? await f.text() : null; }
+    if (!text) return;
+    let data; try { data = JSON.parse(text); } catch { return toast('That isn’t a brand kit file'); }
+    if (!data || data.format !== 'thirdline-brand' || !Array.isArray(data.brands)) return toast('That isn’t a brand kit file');
+    let n = 0;
+    for (const b of data.brands) {
+      if (!b || !b.name) continue;
+      const fonts = [];
+      for (const f of b.fonts || []) {
+        if (!f.data) continue;
+        const buf = fromB64(f.data);
+        await addUserFont({ family: f.family, file: f.file, data: buf });
+        if (api.fonts.installData) api.fonts.installData(f.file, new Uint8Array(buf)).catch(() => {});
+        fonts.push({ family: f.family, file: f.file, data: buf });
+      }
+      const nb = { ...b, fonts, id: brands.some((x) => x.id === b.id) ? 'b' + Date.now().toString(36) + n : b.id };
+      const same = brands.findIndex((x) => x.name === b.name);
+      if (same >= 0) brands[same] = { ...nb, id: brands[same].id }; else brands.push(nb);
+      n++;
+    }
+    if (saveBrands()) { renderBrandMenu(); toast(`Imported ${n} brand kit${n === 1 ? '' : 's'}`); }
   }
   $('#btnBrand').onclick = (e) => { e.stopPropagation(); renderBrandMenu(); $('#brandMenu').hidden = !$('#brandMenu').hidden; };
   document.addEventListener('pointerdown', (e) => { if (!$('#brandMenu').hidden && !e.target.closest('#brandMenu') && !e.target.closest('#btnBrand')) $('#brandMenu').hidden = true; });
@@ -3991,7 +4087,7 @@
   const fromB64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0)).buffer;
   async function projectJSON() {
     // Embed any uploaded fonts the design uses so the file opens the same on another computer.
-    const used = new Set([state.title.font, state.subtitle.font]);
+    const used = usedFontFamilies(state);
     const fonts = [];
     for (const f of userFonts) {
       if (!used.has(f.family)) continue;
@@ -4006,14 +4102,15 @@
     const p = await api.project.save(as ? null : projectPath, json, baseName(projectPath) === 'Untitled' ? (state.title.text || 'Untitled') : baseName(projectPath));
     if (!p) return false;
     projectPath = p; setDirty(false);
+    Shell.addRecent(p);
     toast(`Saved ${baseName(p)}.l3rd`);
     return true;
   }
   async function loadProjectText(text, p) {
     let data;
-    try { data = JSON.parse(text); } catch { toast('That file is not a Thirdline project'); return; }
+    try { data = JSON.parse(text); } catch { toast('That file is not a Thirdline project'); return false; }
     const st = data.state || data;
-    if (!st || !st.title || !st.backdrop) { toast('That file is not a Thirdline project'); return; }
+    if (!st || !st.title || !st.backdrop) { toast('That file is not a Thirdline project'); return false; }
     for (const f of data.fonts || []) {
       const buf = fromB64(f.data);
       await addUserFont({ family: f.family, file: f.file, data: buf });
@@ -4024,27 +4121,59 @@
     history = [JSON.stringify(state)]; histIndex = 0;
     projectPath = data.format === 'thirdline-project' ? p : null;
     setDirty(data.format !== 'thirdline-project');
+    if (projectPath) Shell.addRecent(projectPath);
+    $('#startScreen')?.remove();
+    // A Free-plan user opening an Advanced design still sees it; they just edit it in Easy mode.
+    if (advanced && !Shell.can('advanced')) setAdvanced(false);
     syncControls();
     $('#btnHold').click();
-    toast(`Opened ${baseName(p)}`);
+    await ensureFonts();
+    await scanLocalFonts();
+    const miss = missingFonts();
+    if (miss.length) toast(`Opened ${baseName(p)}. Missing font${miss.length > 1 ? 's' : ''}: ${miss.join(', ')}. Install ${miss.length > 1 ? 'them' : 'it'} or pick another font; a fallback is used until then.`, 9000);
+    else toast(`Opened ${baseName(p)}`);
+    return true;
   }
   const confirmDiscard = () => !dirty || confirm('You have unsaved changes. Discard them?');
   async function openProject() {
-    if (!confirmDiscard()) return;
+    if (!confirmDiscard()) return false;
     const r = await api.project.open();
-    if (r) await loadProjectText(r.text, r.path);
+    return r ? loadProjectText(r.text, r.path) : false;
   }
-  function newProject() {
-    if (!confirmDiscard()) return;
+  async function openPath(p) {
+    if (!confirmDiscard()) return false;
+    let r = null;
+    try { r = await api.project.read(p); } catch { return 'missing'; }
+    return r ? loadProjectText(r.text, r.path) : 'missing';
+  }
+  // New projects use the resolution and frame rate from Settings.
+  function withNewDefaults(st) {
+    const [w, h] = String(Shell.prefs.newRes || '1920x1080').split('x').map(Number);
+    if (w && h && (w !== st.comp.width || h !== st.comp.height)) {
+      const k = Math.min(w, h) / Math.min(st.comp.width, st.comp.height);
+      st.comp.width = w; st.comp.height = h;
+      if (st.comp.designScale != null || k !== 1) st.comp.designScale = (st.comp.designScale || 1) * k;
+    }
+    if (Shell.prefs.newFps) st.comp.fps = Number(Shell.prefs.newFps);
+    return st;
+  }
+  function startFresh(st) {
     (selKey = null, selKeys = []);
-    replaceState(Presets.defaultState());
+    replaceState(withNewDefaults(st));
     history = [JSON.stringify(state)]; histIndex = 0;
     projectPath = null; setDirty(false);
     $('#btnHold').click();
+    return true;
+  }
+  function newProject() {
+    if (!confirmDiscard()) return false;
+    return startFresh(Presets.defaultState());
   }
   api.project.onOpenPath(async (p) => { if (!confirmDiscard()) return; const r = await api.project.read(p); if (r) loadProjectText(r.text, r.path); });
   api.onMenu((cmd) => ({
     new: newProject, open: openProject, save: () => saveProject(false), saveAs: () => saveProject(true),
+    saveAndClose: async () => { if (await saveProject(false)) { setDirty(false); api.closeWindow ? api.closeWindow() : window.close(); } },
+    about: Shell.showAbout, prefs: Shell.showPrefs, license: Shell.showLicense, shortcuts: Shell.showShortcuts, report: Shell.showReport, start: Shell.showStart,
     export: () => $('#btnExport').click(), undo, redo, batch: openBatch, live: openLive, mogrt: () => openMogrt(), updates: () => checkUpdates(true), resetLayout: () => resetLayout(), duplicate: () => duplicateSelection(), group: () => advanced && groupSelection(), ungroup: () => advanced && ungroup(),
   })[cmd]?.());
   $('#btnNew').onclick = newProject;
@@ -4056,6 +4185,13 @@
   $('#btnMogrt').onclick = () => openMogrt();
   $('#btnLiveMenu').onclick = () => openLive();
   $('#btnUpdates').onclick = () => checkUpdates(true);
+  $('#btnPrefs').onclick = () => Shell.showPrefs();
+  $('#btnStartScreen').onclick = () => Shell.showStart();
+  $('#btnGuide').onclick = () => Shell.openGuide();
+  $('#btnShortcuts').onclick = () => Shell.showShortcuts();
+  $('#btnReport').onclick = () => Shell.showReport();
+  $('#btnLicense').onclick = () => Shell.showLicense();
+  $('#btnAbout').onclick = () => Shell.showAbout();
   $('#btnFile').onclick = (e) => { e.stopPropagation(); $('#fileMenu').hidden = !$('#fileMenu').hidden; };
   $('#fileMenu').addEventListener('click', (e) => { if (e.target.closest('button')) $('#fileMenu').hidden = true; });
   document.addEventListener('pointerdown', (e) => {
@@ -4079,9 +4215,9 @@
     });
   }
   let toastTimer;
-  function toast(msg) {
+  function toast(msg, ms = 2600) {
     const t = $('#toast'); t.textContent = msg; t.hidden = false;
-    clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), 2600);
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), ms);
   }
 
   // ---------- Export ----------
@@ -4134,6 +4270,7 @@
       for (let i = 0; i < frames; i++) {
         if (isCancelled()) throw new Error('cancelled');
         Engine.renderFrame(ctx, snap, i / fps, { precise: true });
+        if (Shell.watermarked()) Shell.drawWatermark(ctx, width, height);
         if (format === 'mp4') { ctx.save(); ctx.globalCompositeOperation = 'destination-over'; ctx.fillStyle = bg; ctx.fillRect(0, 0, width, height); ctx.restore(); }
         const img = ctx.getImageData(0, 0, width, height);
         inFlight.push(api.exporter.frame(job, new Uint8Array(img.data.buffer)));
@@ -4214,13 +4351,17 @@
 
   async function runExport() {
     const format = fmt();
-    const out = await api.exporter.chooseDest(format, $('#exportName').value || 'lower-third');
+    if (!Shell.resolutionOk(state.comp.width, state.comp.height)) { Shell.showUpgrade('resolution'); return; }
+    const out = await api.exporter.chooseDest(format, $('#exportName').value || 'lower-third', Shell.prefs.exportDir || undefined);
     if (!out) return;
     const jobs = [[clone(state), out], ...wantedVariants().map((k) => [variantState(state, VARIANTS[k][0], VARIANTS[k][1]), withSuffix(out, VARIANTS[k][2])])];
+    let done = 0;
     for (let j = 0; j < jobs.length; j++) {
       const ok = await runExportJob(format, jobs[j][0], jobs[j][1], jobs.length > 1 ? `${j + 1}/${jobs.length} · ` : '');
       if (!ok) break;
+      done++;
     }
+    if (done === jobs.length) Shell.notifyDone('Export finished', `${baseName(out.split(/[\\/]/).pop())}${jobs.length > 1 ? ` and ${jobs.length - 1} more` : ''} is ready.`, () => lastOut && api.reveal(lastOut));
   }
   async function runExportJob(format, snap, out, prefix) {
     const bar = $('#exportProgress .bar'), label = $('#exportProgress span');
@@ -4279,6 +4420,7 @@
   // ---------- Export as .mogrt (After Effects builds it) ----------
   const mDlg = $('#mogrtDialog');
   async function openMogrt() {
+    if (!Shell.require('mogrt')) return;
     $('#mogrtError').hidden = true; $('#mogrtStatus').textContent = '';
     $('#mogrtGo').disabled = false;
     const ae = await api.mogrt.findAE();
@@ -4336,6 +4478,7 @@
   const bDlg = $('#batchDialog');
   let batch = null, batchCancelled = false, batchDir = null;
   function openBatch() {
+    if (!Shell.require('batch')) return;
     if (!api.exporter || !api.exporter.chooseFolder) return toast('Batch export needs the desktop app.');
     $('#batchError').hidden = true; $('#batchProgress').hidden = true; $('#batchReveal').hidden = true;
     renderBatch(); bDlg.showModal();
@@ -4393,6 +4536,7 @@
       label.textContent = `Done: ${done} files`;
       $('#batchReveal').hidden = false;
       toast(`Batch export finished: ${done} files`);
+      Shell.notifyDone('Batch export finished', `${done} files are ready.`, () => batchDir && api.reveal(batchDir));
     } catch (err) {
       if (err.message === 'cancelled') label.textContent = `Cancelled after ${done} files`;
       else { $('#batchError').hidden = false; $('#batchError').textContent = String(err.message || err); }
@@ -4415,11 +4559,12 @@
   }
   const pushLive = () => { if (!liveOn) return; clearTimeout(liveTimer); liveTimer = setTimeout(() => api.live.update(clone(state)), 150); };
   function openLive() {
+    if (!liveOn && !Shell.require('live')) return;
     if (!api.live) return toast('Live output needs the desktop app.');
     liveUI(); lDlg.showModal();
   }
   $('#liveStart').onclick = async () => {
-    try { liveInfo = await api.live.start({}); liveOn = true; await api.live.update(clone(state)); liveUI(); }
+    try { liveInfo = await api.live.start({}); if (liveInfo && liveInfo.error === 'plan') { Shell.showUpgrade('live'); return; } liveOn = true; await api.live.update(clone(state)); liveUI(); }
     catch (e) { toast(`Couldn’t start live output: ${e.message || e}`); }
   };
   $('#liveStop').onclick = async () => { await api.live.stop(); liveOn = false; liveUI(); };
@@ -4453,7 +4598,10 @@
       if (k === 's') { e.preventDefault(); saveProject(e.shiftKey); return; }
       if (k === 'o') { e.preventDefault(); openProject(); return; }
       if (k === 'e') { e.preventDefault(); $('#btnExport').click(); return; }
+      if (k === ',') { e.preventDefault(); Shell.showPrefs(); return; }
+      if (k === '/') { e.preventDefault(); Shell.showShortcuts(); return; }
     }
+    if (e.key === 'F1' && api.browser) { e.preventDefault(); Shell.openGuide(); return; }
     if (e.key === 'Escape' && !ctxMenu.hidden) { closeMenu(); return; }
     if (typing || dlg.open || gDlg.open || bDlg.open || lDlg.open) return;
     // Space: tap to play / pause, hold and drag to move around a zoomed preview.
@@ -4659,7 +4807,19 @@
       selectAllKeysOf: (path) => { selKeys = (state.keys[path] || []).map((k) => ({ path, k })); selKey = selKeys[selKeys.length - 1] || null; updateKeyBar(); drawTimeline(); }, selKeyTimes: () => selKeys.map((s) => s.k.t),
       tlDebug: () => { const g = tlGeom(); return { rows: timelineRows(), left: TL.left, right: TL.right, ruler: TL.ruler, w: g.w, span: g.span, t0: g.t0, z: tlView.z }; },
       time: () => time, tool: () => tool, selPoint: () => selPoint, viewScale: () => viewScale(), pview: () => ({ ...pview }), rects: () => Object.fromEntries(Object.entries(lastLayout.layers).map(([k, b]) => [k, Engine.screenRect(b)])), playing: () => playing, handles: () => handlePts(), cursor: () => curName, tlLeft: () => TL.left };
-    setTimeout(() => checkUpdates(false).catch(() => {}), 3000);
+    Shell.init({
+      api, el, toast, thumbFor, styleState,
+      styles: () => Presets.BUILTIN.map((p, i) => ({ name: p.name.replace(' (default)', ''), builtin: i })),
+      hasWork: () => !!projectPath || dirty || JSON.stringify(state.title.text) !== JSON.stringify(Presets.defaultState().title.text),
+      newFromStyle: (it) => { if (!confirmDiscard()) return false; const st = Presets.builtin(it.builtin); st.ui = { ...st.ui, style: it.builtin }; return startFresh(st); },
+      newBlank: () => newProject(),
+      loadState: (st, name) => { if (!confirmDiscard()) return false; startFresh(clone(st)); toast(`Opened sample: ${name}`); return true; },
+      openProject, openPath,
+      planChanged: () => { if (advanced && !Shell.can('advanced')) setAdvanced(false); if (liveOn && !Shell.can('live')) { api.live.stop().catch(() => {}); liveOn = false; liveUI(); } },
+    });
+    // (Automated test browsers skip it so the editor is clickable straight away.)
+    if (Shell.prefs.showStart && !projectPath && !navigator.webdriver) Shell.showStart();
+    if (Shell.prefs.checkUpdates) setTimeout(() => checkUpdates(false).catch(() => {}), 3000);
   }
   boot();
 })();
