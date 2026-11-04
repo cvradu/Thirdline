@@ -31,7 +31,11 @@ The app has two modes. **Easy** walks you through three steps (pick a style, typ
 - **Masks:** per-layer rectangle/ellipse masks with feather, rounded corners and invert; keyframe them or use the quick wipe/rise/iris reveal presets.
 - **Text animators:** After Effects-style animators on the title and subtitle. A range selector (start / end / offset / amount, by characters or words, with square/ramp/triangle/round/smooth shapes) drives position, scale, rotation, opacity, blur, tracking and fill colour per letter. Presets (fade, rise, drop, pop, blur words, tracking, colour sweep, wave) add the keyframes for you.
 - **Motion blur:** shutter angle and quality settings; rendered with floating-point accumulation on export, optional preview.
-- **Presets / styles:** 7 built-in styles, save your own, import/share preset files. Undo/redo and autosave.
+- **Presets / styles:** 26 built-in styles with category filters (News, Corporate, Podcast, Sport, Elegant, Bold), save your own, import/share preset files. Undo/redo and autosave.
+- **Start screen:** start from a style or one of the sample projects, or reopen a recent project. Help › Start Screen brings it back.
+- **Help:** an offline user guide (F1), keyboard shortcuts (Cmd/Ctrl+/), Report a problem (copies versions, no project content) and third-party licences.
+- **Settings** (Cmd/Ctrl+,): resolution and frame rate for new projects, default export folder, export notifications, start screen and update check.
+- **Brand kit files:** export brand kits (with their fonts and logo) to a `.thirdline-brand` file and import them on another computer.
 - **More layers (Advanced):** add extra text lines, a logo image, accent bars and other shapes. Drag layers in the list to reorder them, and use the eye to hide one.
 - **Text styling:** tracking, line height, outline (stroke), glow, drop shadow, and auto-fit so long names shrink to fit a maximum width.
 - **Hold and loop:** in Easy mode, drag the In / Hold / Out bar to set how long the graphic stays on screen.
@@ -64,7 +68,7 @@ Each platform build must run on that platform, because `ffmpeg-static` downloads
 
 ## Keyboard shortcuts
 
-Space play/pause · ←/→ step a frame · Home go to start · Cmd/Ctrl+Z undo · Cmd/Ctrl+Shift+Z redo · Cmd/Ctrl+S save preset · Cmd/Ctrl+E export · hold Alt while dragging to disable snapping.
+Space play/pause · ←/→ step a frame · Home go to start · J/K previous/next keyframe · Cmd/Ctrl+Z undo · Cmd/Ctrl+Shift+Z redo · Cmd/Ctrl+S save project · Cmd/Ctrl+E export · Cmd/Ctrl+, settings · Cmd/Ctrl+/ all shortcuts · F1 user guide · hold Alt while dragging to disable snapping.
 
 ## Project layout
 
@@ -72,8 +76,16 @@ Space play/pause · ←/→ step a frame · Home go to start · Cmd/Ctrl+Z undo 
 - `preload.js`: the small API the UI is allowed to call.
 - `src/engine.js`: the renderer. One function draws any frame at any time, used by both preview and export, so exports match the preview exactly.
 - `src/easing.js`, `src/presets.js`, `src/app.js`: easing curves, default/built-in styles, and the editor UI.
-- `test/electron-test.js`: headless end-to-end test that exports every format (`xvfb-run npx electron --no-sandbox test/electron-test.js` on Linux).
+- `src/shell.js`, `src/samples.js`, `src/help/`: start screen, About, Help, Settings, licence dialogs; sample projects; the offline user guide.
+- `license.js`: licence keys, trial and plans (main process).
+- `test/electron-test.js`: headless end-to-end test that exports every format (`xvfb-run npx electron --no-sandbox test/electron-test.js` on Linux). `test/electron-shell-test.js` covers frame rates, project fonts, plans, brand kits and the Help dialogs; `node test/license-test.js` covers licensing.
 
 ## Licences
 
-App code: MIT. Bundled fonts: SIL Open Font License 1.1 (see `src/fonts/LICENSE.txt`). ffmpeg is distributed under the GPL via `ffmpeg-static`.
+Bundled fonts: SIL Open Font License 1.1 (see `src/fonts/LICENSE.txt`). The Mac app ships an LGPL-only ffmpeg built by `scripts/build-ffmpeg-lgpl.sh` (libvpx for VP9, Apple VideoToolbox for H.264, no libx264); development installs use `ffmpeg-static` (GPL). Third-party notices are in `src/help/licenses.html` (Help › Third-Party Licences).
+
+## Shipping settings (`app-config.json`)
+
+- `licensing.enforce`: `false` ships everything unlocked. Set it to `true` together with `storeId` (your Lemon Squeezy store id) and `buyUrl` to turn on licence keys, the 14-day Studio trial and the Free / Pro / Studio plans (`license.js`). A product or variant name containing "Studio" unlocks Studio; any other valid key is Pro. `THIRDLINE_LICENSING=1` turns it on for testing.
+- `updates.repo`: the GitHub repo whose latest release the update check reads (use a public releases-only repo if the source goes private).
+- `support.email` / `support.url`: where Help › Report a problem sends people.
